@@ -69,10 +69,12 @@ Please don't open public issues for security vulnerabilities. Follow
 
 ## Telemetry
 
-The CLI sends anonymous usage data, such as which commands and engines run and
-where runs fail, but no test content, app content, or credentials. Opt out with
-`npx e2e telemetry disable` or `E2E_TELEMETRY_DISABLED=1`.
-[Telemetry](https://e2e.tester.army/docs/telemetry) lists every field.
+This privacy-first fork sends no usage telemetry by default. To opt in deliberately,
+run `npx e2e telemetry enable`; ephemeral CI/fleet runs can opt in with
+`E2E_TELEMETRY_ENABLED=1`. `E2E_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1`
+remain hard opt-outs. No test content, app content, or credentials are included
+in telemetry when enabled. [Telemetry](https://e2e.tester.army/docs/telemetry)
+lists every upstream field.
 
 ## Status
 

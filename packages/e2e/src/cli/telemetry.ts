@@ -12,6 +12,7 @@ const REASONS: Readonly<Record<TelemetryDisabledBy, string>> = {
   E2E_TELEMETRY_DISABLED: 'E2E_TELEMETRY_DISABLED is set',
   DO_NOT_TRACK: 'DO_NOT_TRACK is set',
   checkout: 'running from a source checkout of e2e',
+  default: 'privacy-first default; enable explicitly with e2e telemetry enable or E2E_TELEMETRY_ENABLED=1',
   preference: 'switched off with e2e telemetry disable',
   store: 'the preferences directory is not writable',
 };
@@ -36,7 +37,7 @@ export function telemetry(action: TelemetryAction, instance: Telemetry): number 
   const disabledBy = instance.disabledBy;
   if (disabledBy === undefined) {
     out(`Status: ${picocolors.green('enabled')}`);
-    out('Anonymous usage data is sent: the command, the versions, the OS, and summaries of runs and MCP sessions. Never test names, app data, or credentials.');
+    out('Anonymous usage data is sent because telemetry was explicitly enabled: the command, the versions, the OS, and summaries of runs and MCP sessions. Never test names, app data, or credentials.');
   } else {
     out(`Status: ${picocolors.red('disabled')} (${REASONS[disabledBy]})`);
     out('No usage data is sent from this machine.');

@@ -9,9 +9,10 @@
  * what was still in progress. Telemetry is a CLI concern only: the runner
  * never constructs this class.
  *
- * Off means off at every step. `E2E_TELEMETRY_DISABLED`, `DO_NOT_TRACK`, a
- * source checkout of the repository, an `e2e telemetry disable`, or a
- * preferences directory that cannot be written each stop events from being
+ * Privacy-first means off until explicitly enabled. `E2E_TELEMETRY_DISABLED`,
+ * `DO_NOT_TRACK`, a source checkout of the repository, the absence of an
+ * explicit opt-in, an `e2e telemetry disable`, or a preferences directory
+ * that cannot be written each stop events from being
  * queued, and `flush` reads the preferences file again before sending, so a
  * choice saved from another terminal while the command ran wins too. `E2E_TELEMETRY_DEBUG` prints every event to stderr
  * instead of sending it, so anyone can read exactly what would have left the
@@ -42,7 +43,13 @@ export const NOTICE_VERSION = 3;
 /** The longest a flush may hold the process; the project lookup and the request share it. */
 const DEFAULT_FLUSH_MS = 2_000;
 
-export type TelemetryDisabledBy = 'E2E_TELEMETRY_DISABLED' | 'DO_NOT_TRACK' | 'checkout' | 'preference' | 'store';
+export type TelemetryDisabledBy =
+  | 'E2E_TELEMETRY_DISABLED'
+  | 'DO_NOT_TRACK'
+  | 'checkout'
+  | 'default'
+  | 'preference'
+  | 'store';
 
 export interface TelemetryOptions {
   /** The e2e version, sent with every event. */
@@ -61,11 +68,11 @@ export interface TelemetryOptions {
   readonly projectId?: typeof anonymousProjectId;
 }
 
-/** The one-time notice: what is collected, and the two ways out. */
+/** The one-time notice shown only after telemetry was explicitly enabled. */
 function noticeText(): string {
   return [
-    `${picocolors.bold('e2e collects anonymous usage telemetry')} to improve the framework: the command, the versions, the OS, and summaries of runs and MCP sessions. Never test names, app data, or credentials.`,
-    `Opt out with ${picocolors.cyan('e2e telemetry disable')} or ${picocolors.cyan('E2E_TELEMETRY_DISABLED=1')}. What is sent: ${picocolors.underline(`${DOCS_URL}/telemetry`)}`,
+    `${picocolors.bold('e2e anonymous usage telemetry is enabled')} by explicit opt-in: the command, the versions, the OS, and summaries of runs and MCP sessions. Never test names, app data, or credentials.`,
+    `Turn it off with ${picocolors.cyan('e2e telemetry disable')} or ${picocolors.cyan('E2E_TELEMETRY_DISABLED=1')}. What is sent: ${picocolors.underline(`${DOCS_URL}/telemetry`)}`,
     '',
     '',
   ].join('\n');
@@ -127,10 +134,22 @@ export class Telemetry {
     if (envFlag(this.env, 'E2E_TELEMETRY_DISABLED')) return 'E2E_TELEMETRY_DISABLED';
     if (envFlag(this.env, 'DO_NOT_TRACK')) return 'DO_NOT_TRACK';
     if (this.checkout) return 'checkout';
-    if (this.statedId !== undefined) return undefined;
+
+    // CI and fleet runs have no local preference store. Require an explicit
+    // environment opt-in before any usage data can leave those machines.
+    if (this.statedId !== undefined) {
+      return envFlag(this.env, 'E2E_TELEMETRY_ENABLED') ? undefined : 'default';
+    }
+
     const store: TelemetryStore | undefined = this.store();
     if (store === undefined) return 'store';
-    return store.enabled ? undefined : 'preference';
+
+    // A saved opt-out stays authoritative even if a broad shell profile sets
+    // the opt-in variable. Enabling again requires an explicit saved choice.
+    if (store.choice === false) return 'preference';
+    if (envFlag(this.env, 'E2E_TELEMETRY_ENABLED')) return undefined;
+    if (store.choice === true) return undefined;
+    return 'default';
   }
 
   get enabled(): boolean {

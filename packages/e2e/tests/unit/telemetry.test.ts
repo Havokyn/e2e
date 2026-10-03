@@ -54,23 +54,38 @@ function recordingFetch(status = 200): { calls: SentBatch[]; fetch: typeof fetch
   return { calls, fetch: impl };
 }
 
+/** Creates an opted-in telemetry instance with captured output and requests; overrides can disable consent. */
 function create(overrides: Partial<TelemetryOptions> = {}) {
   const output: string[] = [];
   const sent = recordingFetch();
   const configDir = overrides.configDir ?? tempDir();
+  const { env, ...rest } = overrides;
   const telemetry = new Telemetry({
     version: '1.2.3',
-    env: {},
+    // Most tests exercise sending behavior, so opt in explicitly here.
+    // Individual privacy-default tests unset this variable.
+    env: { E2E_TELEMETRY_ENABLED: '1', ...env },
     cwd: tempDir(),
     configDir,
     fetch: sent.fetch,
     write: (text) => void output.push(text),
-    ...overrides,
+    ...rest,
   });
   return { telemetry, output, sent, configDir };
 }
 
 describe('Telemetry', () => {
+  it('is off by default until the user explicitly opts in', async () => {
+    const { telemetry, output, sent } = create({ env: { E2E_TELEMETRY_ENABLED: undefined } });
+    expect(telemetry.enabled).toBe(false);
+    expect(telemetry.disabledBy).toBe('default');
+    telemetry.notice();
+    telemetry.session('run');
+    telemetry.endSession(0);
+    await telemetry.flush();
+    expect(output).toEqual([]);
+    expect(sent.calls).toEqual([]);
+  });
   it('is off in a source checkout of the repository: no notice, no events, and the reason names it', async () => {
     const { telemetry, output, sent } = create({ checkout: true });
     expect(telemetry.enabled).toBe(false);
@@ -83,7 +98,7 @@ describe('Telemetry', () => {
     expect(sent.calls).toEqual([]);
   });
 
-  it('is on by default, prints the notice once, and sends one batch with identity and environment', async () => {
+  it('sends after explicit opt-in, prints the notice once, and includes identity and environment', async () => {
     const { telemetry, output, sent, configDir } = create();
     expect(telemetry.enabled).toBe(true);
     expect(telemetry.disabledBy).toBeUndefined();
@@ -91,7 +106,7 @@ describe('Telemetry', () => {
     telemetry.notice();
     telemetry.notice();
     expect(output).toHaveLength(1);
-    expect(output[0]).toContain('e2e collects anonymous usage telemetry');
+    expect(output[0]).toContain('e2e anonymous usage telemetry is enabled');
     expect(output[0]).toContain('e2e telemetry disable');
     expect(output[0]).toContain('E2E_TELEMETRY_DISABLED=1');
     expect(output[0]).toContain('/telemetry');

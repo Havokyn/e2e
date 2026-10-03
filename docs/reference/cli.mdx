@@ -761,13 +761,13 @@ shorter one would rewrite ordinary words. Bearer tokens,
 URL credentials, private keys, JWTs, and common API key shapes become
 `<redacted>`. Do not paste app data, page content, or test files.
 
-Feedback is sent only when you run the command, so a saved
-`e2e telemetry disable` does not stop it. `E2E_TELEMETRY_DISABLED=1` and
-`DO_NOT_TRACK=1` do: with either set the command exits 2 and sends nothing,
-so a CI job or a fleet that opted out sends nothing even when an agent runs
-it. `E2E_TELEMETRY_DEBUG=1` prints it like `--dry-run`. It prints a reference
-id and exits 0 once PostHog accepts the event, or exits 3 when PostHog did
-not confirm it; the report may still have arrived, so the message names its
+In this privacy-first fork, feedback is sent only when you run the command
+**and** telemetry has been explicitly enabled. With telemetry disabled the
+command exits 2 and sends nothing; use `--dry-run` to inspect the event
+locally. `E2E_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` remain hard
+opt-outs. When sending is enabled, the command prints a reference id and
+exits 0 once PostHog accepts the event, or exits 3 when PostHog did not
+confirm it; the report may still have arrived, so the message names its
 reference id.
 
 ## e2e telemetry
@@ -779,32 +779,33 @@ Shows whether anonymous usage telemetry is on, and switches it.
 | --- | --- |
 | `e2e telemetry`, `e2e telemetry status` | Prints `Status: enabled`, or `Status: disabled` with the reason: the variable that is set, the saved choice, or a preferences directory that cannot be written. |
 | `e2e telemetry disable` | Saves the opt-out to `~/.config/e2e/telemetry.json` (`$XDG_CONFIG_HOME/e2e/` when set, `%APPDATA%\e2e\` on Windows) and prints the status. |
-| `e2e telemetry enable` | Saves the opt-in and prints the status. A variable set in the environment still wins, and the status says so. |
+| `e2e telemetry enable` | Saves the opt-in and prints the status. A saved disable takes precedence over `E2E_TELEMETRY_ENABLED`; run this command to change that saved choice. `E2E_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` remain hard opt-outs, and the status says so. |
 
 <CodeGroup>
 ```bash npm
 npx e2e telemetry
 npx e2e telemetry disable
-E2E_TELEMETRY_DEBUG=1 npx e2e run
+E2E_TELEMETRY_ENABLED=1 E2E_TELEMETRY_DEBUG=1 npx e2e run
 ```
 
 ```bash pnpm
 pnpm exec e2e telemetry
 pnpm exec e2e telemetry disable
-E2E_TELEMETRY_DEBUG=1 pnpm exec e2e run
+E2E_TELEMETRY_ENABLED=1 E2E_TELEMETRY_DEBUG=1 pnpm exec e2e run
 ```
 
 ```bash bun
 bunx e2e telemetry
 bunx e2e telemetry disable
-E2E_TELEMETRY_DEBUG=1 bunx e2e run
+E2E_TELEMETRY_ENABLED=1 E2E_TELEMETRY_DEBUG=1 bunx e2e run
 ```
 </CodeGroup>
 
 `E2E_TELEMETRY_DISABLED=1` and `DO_NOT_TRACK=1` turn telemetry off without
-touching the file. `E2E_TELEMETRY_DEBUG=1` prints every event to stderr and
-sends nothing. The first command on a machine other than `e2e init` and
-`e2e telemetry` prints a notice once; in CI nothing is printed and no file is written.
+touching the file. With telemetry explicitly enabled, `E2E_TELEMETRY_DEBUG=1`
+prints every event to stderr and sends nothing. The first command after an
+explicit local opt-in, other than `e2e init` and `e2e telemetry`, prints the
+telemetry notice once; in CI nothing is printed and no preferences file is written.
 
 ## Exit codes
 

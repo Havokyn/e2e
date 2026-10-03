@@ -52,7 +52,13 @@ import { connectionAbort } from './operation-budget.ts';
 import { CLOSED_SHADOW_ROOTS_INIT_SCRIPT } from './closed-shadow.ts';
 import { SECURE_FIELD_SELECTOR, type RawNodeData } from './read-node.ts';
 import { readSelector, takeReadsFunction } from './read-selector.ts';
-import { httpCredentials, installSiteHeaders, lowercaseNames, siteHeadersFor } from './protected-app.ts';
+import {
+  httpCredentials,
+  installNavigationPolicy,
+  installSiteHeaders,
+  lowercaseNames,
+  siteHeadersFor,
+} from './protected-app.ts';
 import { RefRegistry } from './refs.ts';
 import {
   cancelled,
@@ -137,6 +143,8 @@ export interface WebBasicAuth {
   readonly password: string | Secret;
 }
 
+/** Where top-level browser navigation may leave the target app. */
+export type WebNavigationPolicy = 'same-site' | 'any';
 /** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
 export interface WebScreencastOptions {
   /** Frame size in pixels; default the viewport's, or the window's under `viewport: null`. A smaller size makes a smaller file. */
@@ -177,6 +185,14 @@ export interface WebOptions {
    * the chromium browser (the default). Wired by a hosted-browser engine.
    */
   readonly connect?: WebConnectOptions;
+  /**
+   * Top-level navigation policy. This privacy-first fork defaults to
+   * `same-site`: the main frame and popup main frames may stay on the app's
+   * registrable site, while off-site document navigations are blocked.
+   * Subresources and child frames remain unrestricted. Use `any` only for
+   * flows that intentionally leave the app's site, such as third-party OAuth.
+   */
+  readonly navigationPolicy?: WebNavigationPolicy;
   /**
    * HTTP headers added to every request the browser sends to an allowed
    * origin: a preview-protection bypass token, a tunnel's interstitial skip.
@@ -235,6 +251,7 @@ export class PlaywrightSurface {
   private readonly usedContexts = new Set<string>();
   private readonly viewport: ViewportSize | null;
   private readonly screencast: WebScreencastOptions;
+  private readonly navigationPolicy: WebNavigationPolicy;
   /** Injected request headers, names lowercased so they replace the browser's own of the same name. */
   private readonly headers: Readonly<Record<string, string>> | undefined;
   private readonly basicAuth: WebBasicAuth | undefined;
@@ -259,6 +276,7 @@ export class PlaywrightSurface {
     this.connect = options.connect;
     this.viewport = options.viewport === undefined ? DEFAULT_VIEWPORT : options.viewport;
     this.screencast = options.screencast ?? {};
+    this.navigationPolicy = options.navigationPolicy ?? 'same-site';
     this.headers = options.headers === undefined ? undefined : lowercaseNames(options.headers);
     this.basicAuth = options.basicAuth;
     this.testIdAttribute = options.testIdAttribute ?? DEFAULT_TEST_ID_ATTRIBUTE;
@@ -417,7 +435,7 @@ export class PlaywrightSurface {
         acceptDownloads: true,
         ...(credentials === undefined ? {} : { httpCredentials: credentials }),
         ...(this.userAgent === undefined ? {} : { userAgent: this.userAgent }),
-        ...(this.headers === undefined ? {} : { serviceWorkers: 'block' as const }),
+        ...(this.headers === undefined && this.navigationPolicy === 'any' ? {} : { serviceWorkers: 'block' as const }),
       },
       configure: async (target) => {
         await target.addInitScript(CLOSED_SHADOW_ROOTS_INIT_SCRIPT);
@@ -425,6 +443,10 @@ export class PlaywrightSurface {
         target.on('dialog', (dialog) => { void dialogs.dispatch(dialog); });
         await installSiteHeaders(target, this.app.site, this.headers);
         for (const stored of routes) await target.route(stored.predicate, stored.handler);
+        // Register the security route last so Playwright evaluates it first.
+        // Project routes may observe/fallback off-site subresources but cannot
+        // bypass a blocked top-level navigation by fulfilling it first.
+        await installNavigationPolicy(target, this.app.site, this.navigationPolicy);
       },
       ...(persistent === undefined ? {} : { persistent }),
       record: this.leases?.recorder(context.attemptId),
@@ -495,6 +517,9 @@ export class PlaywrightSurface {
     const context = this.requireContext();
     this.routes.push({ predicate, handler });
     await context.route(predicate, handler);
+    // Playwright gives the most recently registered matching route priority.
+    // Move the security guard back to the top after every public browser.route.
+    await installNavigationPolicy(context, this.app.site, this.navigationPolicy);
   }
 
   /** The configured headers a request to `url` carries, lowercased; `undefined` off the app's site. */

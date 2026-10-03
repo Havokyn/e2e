@@ -820,7 +820,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .command('feedback')
     .summary('send a bug report, docs problem, or feature request to the e2e team')
     .description(
-      'Send one report about e2e itself to the e2e team. Coding agents are welcome to send one when e2e breaks, the docs mislead, or a capability is missing. The report and the anonymous machine facts telemetry carries go to PostHog as one event; secret-named environment variable values and well-known token shapes are redacted first. Sent only when asked for, so e2e telemetry disable does not stop it; E2E_TELEMETRY_DISABLED and DO_NOT_TRACK do. --dry-run prints the event and sends nothing.',
+      'Send one report about e2e itself to the e2e team. In this privacy-first fork, feedback is sent only when telemetry has been explicitly enabled; otherwise use --dry-run. The report and anonymous machine facts go to PostHog as one event, with secret-named environment variables and well-known token shapes redacted first.',
     )
     .optionsGroup('Report:')
     .addOption(new Option('--type <type>', 'what kind of report').choices(FEEDBACK_TYPES).default('other'))
@@ -855,14 +855,14 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .command('telemetry')
     .summary('show, enable, or disable anonymous usage telemetry')
     .description(
-      'Print whether anonymous usage telemetry is on, and why not when it is off, or switch it. enable and disable save the choice to the preferences file; E2E_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1 in the environment overrides it, and E2E_TELEMETRY_DEBUG=1 prints every event to stderr instead of sending it.',
+      'Print whether anonymous usage telemetry is on, and why not when it is off, or switch it. Telemetry is off by default in this privacy-first fork. enable and disable save the choice to the preferences file; E2E_TELEMETRY_ENABLED=1 explicitly opts in for ephemeral CI/fleet runs, while E2E_TELEMETRY_DISABLED=1 or DO_NOT_TRACK=1 opt out.',
     )
     .addArgument(new Argument('[action]', 'status, enable, or disable').choices(TELEMETRY_ACTIONS).default('status'))
     .addHelpText(
       'after',
       [
         '',
-        examples(['e2e telemetry', 'e2e telemetry disable', 'E2E_TELEMETRY_DEBUG=1 e2e run']),
+        examples(['e2e telemetry', 'e2e telemetry enable', 'E2E_TELEMETRY_ENABLED=1 e2e run']),
         '',
         docsLine('/telemetry'),
       ].join('\n'),
