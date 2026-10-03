@@ -935,7 +935,7 @@ describe('e2e telemetry', () => {
   it('prints the notice once before the first command and a session event per command', async () => {
     await invoke('list');
     await invoke('list', '--tag', 'smoke');
-    const notices = written(stderrSpy).split('e2e collects anonymous usage telemetry').length - 1;
+    const notices = written(stderrSpy).split('e2e anonymous usage telemetry is enabled').length - 1;
     expect(notices).toBe(1);
     expect(written(stderrSpy)).toContain('e2e telemetry disable');
     const events = printedEvents();
@@ -950,16 +950,16 @@ describe('e2e telemetry', () => {
 
   it('does not print the notice before e2e telemetry itself', async () => {
     await invoke('telemetry');
-    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
+    expect(written(stderrSpy)).not.toContain('e2e anonymous usage telemetry is enabled');
     expect(printedEvents().map((event) => event.properties['command'])).toEqual(['telemetry']);
   });
 
   it('does not print the notice before e2e init, and still prints it before the next command', async () => {
     await invoke('init', '--yes');
-    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
+    expect(written(stderrSpy)).not.toContain('e2e anonymous usage telemetry is enabled');
     expect(printedEvents().filter((event) => event.event === 'e2e_cli_session').map((event) => event.properties['command'])).toEqual(['init']);
     await invoke('list');
-    expect(written(stderrSpy)).toContain('e2e collects anonymous usage telemetry');
+    expect(written(stderrSpy)).toContain('e2e anonymous usage telemetry is enabled');
   });
 
   it('records the run event from the report the run returned, with the flag names only', async () => {
