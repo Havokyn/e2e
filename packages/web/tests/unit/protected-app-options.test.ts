@@ -1,5 +1,5 @@
 /**
- * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `screencast` options are checked at
+ * The `navigationPolicy`, `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `screencast` options are checked at
  * config load, so a header the browser could never send or an attribute no
  * element could carry fails the run before a browser launches. What the
  * browser does with valid ones is in tests/integration.
@@ -10,6 +10,18 @@ import { secrets } from 'e2e';
 import { web } from '../../src/index.ts';
 import { httpCredentials } from '../../src/protected-app.ts';
 
+describe('web({ navigationPolicy })', () => {
+  it('accepts the privacy-first same-site policy and the explicit unrestricted policy', () => {
+    expect(() => web({ navigationPolicy: 'same-site' })).not.toThrow();
+    expect(() => web({ navigationPolicy: 'any' })).not.toThrow();
+  });
+
+  it('rejects an unknown policy', () => {
+    expect(() => web({ navigationPolicy: 'oauth-only' as unknown as 'same-site' })).toThrowError(
+      /navigationPolicy.*same-site.*any/,
+    );
+  });
+});
 describe('web({ headers })', () => {
   it('accepts an object of header names to string values', () => {
     expect(() =>
@@ -150,7 +162,7 @@ describe('web() option keys', () => {
       refused('web() has unknown key "viewprt"; did you mean "viewport"?'),
     );
     expect(() => web({ launchOptions: {} } as unknown as Parameters<typeof web>[0])).toThrow(
-      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, headers, basicAuth, testIdAttribute, userAgent'),
+      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, navigationPolicy, headers, basicAuth, testIdAttribute, userAgent'),
     );
   });
 
