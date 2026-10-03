@@ -106,7 +106,7 @@ describe('Telemetry', () => {
     telemetry.notice();
     telemetry.notice();
     expect(output).toHaveLength(1);
-    expect(output[0]).toContain('e2e collects anonymous usage telemetry');
+    expect(output[0]).toContain('e2e anonymous usage telemetry is enabled');
     expect(output[0]).toContain('e2e telemetry disable');
     expect(output[0]).toContain('E2E_TELEMETRY_DISABLED=1');
     expect(output[0]).toContain('/telemetry');
