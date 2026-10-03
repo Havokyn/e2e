@@ -752,6 +752,7 @@ describe('e2e feedback', () => {
     fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubEnv('E2E_TELEMETRY_DISABLED', undefined);
+    vi.stubEnv('E2E_TELEMETRY_ENABLED', '1');
     vi.stubEnv('DO_NOT_TRACK', undefined);
     vi.stubEnv('E2E_TELEMETRY_DEBUG', undefined);
     vi.stubEnv('CI', undefined);
@@ -784,13 +785,15 @@ describe('e2e feedback', () => {
     expect(written(stdoutSpy)).toBe(`Feedback sent to the e2e team, thank you. Reference: ${event?.uuid}\n`);
   });
 
-  it('still sends after e2e telemetry disable, under an id of its own', async () => {
+  it('sends nothing after e2e telemetry disable', async () => {
     await invoke('telemetry', 'disable');
     stdoutSpy.mockClear();
+    fetchMock.mockClear();
     await invoke('feedback', '-m', 'broken');
-    expect(process.exitCode).toBe(0);
-    const [event] = sentFeedback();
-    expect(event?.properties['distinct_id']).toBe(`feedback:${event?.uuid}`);
+    expect(process.exitCode).toBe(2);
+    expect(sentFeedback()).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(written(stderrSpy)).toContain('feedback not sent: telemetry is disabled (preference)');
   });
 
   it.each(['E2E_TELEMETRY_DISABLED', 'DO_NOT_TRACK'])('sends nothing and exits 2 when %s is set', async (variable) => {
@@ -864,6 +867,7 @@ describe('e2e telemetry', () => {
     configHome = mkdtempSync(path.join(os.tmpdir(), 'e2e-cli-telemetry-'));
     // The suite-wide opt-out is lifted; debug mode prints instead of sending.
     vi.stubEnv('E2E_TELEMETRY_DISABLED', undefined);
+    vi.stubEnv('E2E_TELEMETRY_ENABLED', '1');
     vi.stubEnv('DO_NOT_TRACK', undefined);
     vi.stubEnv('CI', undefined);
     vi.stubEnv('E2E_TELEMETRY_DEBUG', '1');
@@ -876,11 +880,21 @@ describe('e2e telemetry', () => {
     rmSync(configHome, { recursive: true, force: true });
   });
 
-  it('reports enabled by default and points at the docs', async () => {
+  it('reports enabled after explicit opt-in and points at the docs', async () => {
     await invoke('telemetry');
     const out = written(stdoutSpy);
     expect(out).toContain('Status: enabled\n');
     expect(out).toContain('Details: https://e2e.tester.army/docs/telemetry\n');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('reports the privacy-first default when no opt-in exists', async () => {
+    vi.stubEnv('E2E_TELEMETRY_ENABLED', undefined);
+    await invoke('telemetry');
+    const out = written(stdoutSpy);
+    expect(out).toContain('Status: disabled (privacy-first default');
+    expect(out).toContain('No usage data is sent from this machine.\n');
+    expect(printedEvents()).toEqual([]);
     expect(process.exitCode).toBe(0);
   });
 
@@ -1045,8 +1059,8 @@ describe('e2e telemetry', () => {
     await invoke('telemetry', '--help');
     const help = written(stdoutSpy);
     expect(help).toContain('Usage: e2e telemetry [options] [action]');
-    expect(help).toContain('E2E_TELEMETRY_DEBUG=1');
-    expect(help).toContain('  $ E2E_TELEMETRY_DEBUG=1 e2e run\n');
+    expect(help).toContain('E2E_TELEMETRY_ENABLED=1');
+    expect(help).toContain('  $ E2E_TELEMETRY_ENABLED=1 e2e run\n');
     expect(help).toContain('Docs: https://e2e.tester.army/docs/telemetry\n');
     expect(process.exitCode).toBe(0);
   });
