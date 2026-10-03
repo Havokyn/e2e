@@ -2,11 +2,11 @@
  * `e2e feedback`: one report about e2e itself, from a person or the coding
  * agent in their shell, sent to the e2e team as a single PostHog event.
  *
- * Feedback is not telemetry: it leaves the machine only when asked for, so a
- * saved `e2e telemetry disable` does not stop it, and it carries the words
- * someone typed. `E2E_TELEMETRY_DISABLED` and `DO_NOT_TRACK` do stop it: an
- * operator sets those on a CI job or a fleet to send nothing at all, and an
- * agent there may run the command without a person asking. What it attaches on its own is the anonymous machine facts every
+ * Privacy-first fork behavior: feedback shares the telemetry consent gate.
+ * It leaves the machine only when asked for AND telemetry is explicitly
+ * enabled. This prevents a coding agent from sending a report after the user
+ * chose a no-egress posture. `--dry-run` remains available while telemetry is
+ * disabled. What it attaches on its own is the anonymous machine facts every
  * telemetry event carries. Before anything is sent, the value of every
  * secret-named environment variable and every well-known token shape is
  * rewritten, so an error message pasted whole does not carry a key along.
@@ -18,7 +18,7 @@ import { createRedactor } from '../internal/redact.ts';
 import { MIN_SECRET_LENGTH, secretLength } from '../config/secrets.ts';
 import { collectEnvironment } from '../telemetry/environment.ts';
 import { postBatch, type PostHogEvent } from '../telemetry/posthog.ts';
-import type { Telemetry, TelemetryDisabledBy } from '../telemetry/telemetry.ts';
+import type { Telemetry } from '../telemetry/telemetry.ts';
 
 export const FEEDBACK_TYPES = ['bug', 'docs', 'feature', 'other'] as const;
 export type FeedbackType = (typeof FEEDBACK_TYPES)[number];
@@ -114,9 +114,6 @@ function feedbackEvent(report: FeedbackReport, options: FeedbackOptions, env: No
   };
 }
 
-/** The variables that switch feedback off along with telemetry. */
-const BLOCKING: ReadonlySet<TelemetryDisabledBy> = new Set(['E2E_TELEMETRY_DISABLED', 'DO_NOT_TRACK']);
-
 /**
  * Sends the report, or prints it under `--dry-run` or `E2E_TELEMETRY_DEBUG`.
  * Exit 0 when PostHog accepted it, 2 when an opt-out variable forbids
@@ -131,8 +128,10 @@ export async function feedback(report: FeedbackReport, options: FeedbackOptions)
     return 0;
   }
   const disabledBy = options.telemetry.disabledBy;
-  if (disabledBy !== undefined && BLOCKING.has(disabledBy)) {
-    process.stderr.write(`feedback not sent: ${disabledBy} is set, which switches off everything e2e sends. Unset it for this command to send the report.\n`);
+  if (disabledBy !== undefined) {
+    process.stderr.write(
+      `feedback not sent: telemetry is disabled (${disabledBy}). Explicitly enable telemetry for this command or use --dry-run.\n`,
+    );
     return 2;
   }
   const sent = await postBatch([event], { signal: AbortSignal.timeout(SEND_TIMEOUT_MS), fetch: options.fetch ?? fetch });
