@@ -55,7 +55,7 @@ export function web(options: WebOptions = {}): EngineHandle {
   if ('allowedOrigins' in options) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      'web({ allowedOrigins }) is gone: navigation and secret fills are not gated by origin; remove the option',
+      'web({ allowedOrigins }) is gone: use navigationPolicy: "same-site" for top-level navigation; secret fills remain field-gated',
     );
   }
   if ('video' in options) {
