@@ -116,7 +116,7 @@ function feedbackEvent(report: FeedbackReport, options: FeedbackOptions, env: No
 
 /**
  * Sends the report, or prints it under `--dry-run` or `E2E_TELEMETRY_DEBUG`.
- * Exit 0 when PostHog accepted it, 2 when an opt-out variable forbids
+ * Exit 0 when PostHog accepted it, 2 when telemetry consent forbids
  * sending, 3 when PostHog did not confirm it: a timeout can follow delivery,
  * so the message names the reference and never claims nothing arrived.
  */
