@@ -188,7 +188,8 @@ export interface WebOptions {
   /**
    * Top-level navigation policy. This privacy-first fork defaults to
    * `same-site`: the main frame and popup main frames may stay on the app's
-   * registrable site, while off-site document navigations are blocked.
+   * registrable site, while routed off-site document navigations are blocked.
+   * HTTP redirect destinations bypass routing and are not checked.
    * Subresources and child frames remain unrestricted. Use `any` only for
    * flows that intentionally leave the app's site, such as third-party OAuth.
    */

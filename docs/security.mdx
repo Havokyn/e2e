@@ -64,9 +64,12 @@ A tool call that breaks a rule fails with `POLICY_DENIED`:
 
 The web engine in this privacy-first fork defaults to
 `navigationPolicy: 'same-site'`. It installs a browser-context route that
-blocks an off-site main-frame document request regardless of how navigation
-was initiated: `app.open`, `browser.goto`, an agent step, a link click, a
-redirect, or a popup's first navigation. Set
+blocks routed off-site main-frame document requests from `app.open`,
+`browser.goto`, agent steps, link clicks, and popups. An off-site navigation whose
+frame is not available yet is blocked too. HTTP redirect destinations
+bypass Playwright routing and are not checked: an allowed same-site URL
+can redirect the browser off-site. This policy is not a network isolation
+boundary. Set
 `web({ navigationPolicy: 'any' })` only when a deliberate flow such as
 third-party OAuth must leave the target site.
 

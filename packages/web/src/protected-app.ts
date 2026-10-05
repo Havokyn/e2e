@@ -88,11 +88,12 @@ const navigationPolicies = new WeakMap<BrowserContext, InstalledNavigationPolicy
 /**
  * Enforces the fork's top-level navigation policy.
  *
- * `same-site` blocks an off-site main-frame document request no matter how it
- * was initiated: app.open/browser.goto, an agent navigation, a link click, a
- * redirect, or a popup's first navigation. Subresources and child-frame
- * navigations are allowed so CDNs, APIs, analytics, and embedded content do
- * not break the app. `any` preserves upstream's unrestricted http(s) behavior.
+ * `same-site` blocks routed off-site main-frame document requests from
+ * app.open/browser.goto, agent navigation, link clicks, and popups. HTTP
+ * redirect destinations bypass Playwright routing and are not checked.
+ * Subresources and child-frame navigations are allowed so CDNs, APIs,
+ * analytics, and embedded content do not break the app. `any` preserves
+ * upstream's unrestricted http(s) behavior.
  */
 export async function installNavigationPolicy(
   context: BrowserContext,
@@ -111,7 +112,15 @@ export async function installNavigationPolicy(
   const predicate = (url: URL) => !sameSite(url, site);
   const handler = async (route: Route): Promise<void> => {
     const request = route.request();
-    const topLevelNavigation = request.isNavigationRequest() && request.frame().parentFrame() === null;
+    let topLevelNavigation = request.isNavigationRequest();
+    if (topLevelNavigation) {
+      try {
+        topLevelNavigation = request.frame().parentFrame() === null;
+      } catch {
+        // A popup's first request can precede its frame. Keep the navigation
+        // blocked when we cannot establish that it belongs to a child frame.
+      }
+    }
     if (topLevelNavigation) {
       await route.abort('blockedbyclient').catch(() => undefined);
       return;

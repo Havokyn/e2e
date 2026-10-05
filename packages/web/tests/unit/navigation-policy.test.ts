@@ -26,7 +26,7 @@ async function capture(site: string | undefined, policy: 'same-site' | 'any'): P
 }
 
 /** Creates a route with the requested navigation and frame state, plus spies for abort and fallback. */
-function requestRoute(options: { navigation: boolean; topLevel: boolean }): {
+function requestRoute(options: { navigation: boolean; topLevel: boolean; frameUnavailable?: boolean }): {
   readonly route: Route;
   readonly abort: ReturnType<typeof vi.fn>;
   readonly fallback: ReturnType<typeof vi.fn>;
@@ -35,7 +35,10 @@ function requestRoute(options: { navigation: boolean; topLevel: boolean }): {
   const frame = { parentFrame: () => (options.topLevel ? null : parent) } as unknown as Frame;
   const request = {
     isNavigationRequest: () => options.navigation,
-    frame: () => frame,
+    frame: () => {
+      if (options.frameUnavailable) throw new Error('Frame is not available for this request');
+      return frame;
+    },
   } as unknown as Request;
   const abort = vi.fn(async () => undefined);
   const fallback = vi.fn(async () => undefined);
@@ -130,6 +133,22 @@ describe('privacy-first navigation policy', () => {
     await captured!.handler(attempted.route);
     expect(attempted.abort).toHaveBeenCalledWith('blockedbyclient');
     expect(attempted.fallback).not.toHaveBeenCalled();
+  });
+
+  it('blocks a popup navigation whose frame is not available yet', async () => {
+    const { captured } = await capture('example.com', 'same-site');
+    const attempted = requestRoute({ navigation: true, topLevel: true, frameUnavailable: true });
+    await captured!.handler(attempted.route);
+    expect(attempted.abort).toHaveBeenCalledWith('blockedbyclient');
+    expect(attempted.fallback).not.toHaveBeenCalled();
+  });
+
+  it('does not ask for a frame for non-navigation requests', async () => {
+    const { captured } = await capture('example.com', 'same-site');
+    const attempted = requestRoute({ navigation: false, topLevel: false, frameUnavailable: true });
+    await captured!.handler(attempted.route);
+    expect(attempted.fallback).toHaveBeenCalledOnce();
+    expect(attempted.abort).not.toHaveBeenCalled();
   });
 
   it('allows off-site subresources and child-frame navigations', async () => {
