@@ -408,6 +408,7 @@ export interface SwipeOptions {
   momentum?: Momentum;
   from?: never;
   to?: never;
+  duration?: never;
 }
 
 /** A swipe along a path between two viewport points: a touch swipe on a device, a pointer drag on a document platform. */
@@ -416,6 +417,8 @@ export interface SwipePathOptions {
   from: Point;
   /** Where it lifts. */
   to: Point;
+  /** Gesture duration in milliseconds; omitted = the engine's default. */
+  duration?: number;
   direction?: never;
   momentum?: never;
 }
@@ -1181,9 +1184,9 @@ export interface StoredArtifact {
   readonly path: string;
   /**
    * How much of the file the runner masked, as the report records it. A
-   * `download` is `incomplete` unless the runner rewrote it as text after a
-   * secret fill; a store that exports only what the runner vouches for reads
-   * this rather than the kind.
+   * `download` is `incomplete` unless the runner ran it as text through the
+   * session's secret values; a store that exports only what the runner
+   * vouches for reads this rather than the kind.
    */
   readonly redaction: 'complete' | 'not-required' | 'incomplete';
   readonly runId: string;

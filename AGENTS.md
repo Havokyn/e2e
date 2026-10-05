@@ -28,7 +28,6 @@ There is no separate spec. The code is the contract, pinned in three places:
 
 There are no RFCs or design documents in the repo. The why lives in PR
 descriptions and commit bodies; `git log` and `gh pr view` are the archive.
-
 ## Layout
 
 `packages/` holds what publishes to npm; `apps/` holds the private apps and
@@ -67,6 +66,14 @@ suites that consume the built packages the way a user would.
   `e2e/engine` only: the semantics every engine must reproduce
   (error taxonomy, text and URL matching, assertion polling, JSON-value rules)
   are exported there, and there is no `e2e/internal` subpath.
+- `packages/mobile` — the published `@e2e-dev/mobile` package: the
+  iOS/Android engine on agent-device, built with the same public
+  `defineEngine`, contributing the `device` fixture. Like the web engine it
+  depends on `e2e` (peer), never the reverse; the engine implementation
+  imports from `e2e/engine` only, and a target names it as `engine: mobile()`.
+  The `@e2e-dev/mobile/tools` subpath holds the agent-side `open_app`, `swipe`,
+  and `alert` tools; focused-field typing uses the engine's keyboard grammar.
+  The main entry never loads the AI SDK.
 - `packages/kernel` - the published `@e2e-dev/kernel` package: Kernel hosted
   browsers for the web engine. An official integration with a hosted service
   is one package per service, named after it (`@e2e-dev/<service>`), with the
@@ -78,6 +85,18 @@ suites that consume the built packages the way a user would.
   hosted iOS simulators and Android emulators for the mobile engine
   (`DeviceProvider`). Expo publishes no SDK for the sessions API, so it calls
   Expo's GraphQL API with `fetch`, and `@e2e-dev/mobile` is its only peer.
+- `packages/decision` — the published `@e2e-dev/decision` package: a
+  `StepExecutor` (`decisionExecutor()`) that drives `agent.act` and
+  `agent.assert` through an AI SDK *evaluation* model answering `choice`
+  questions with probability distributions, plus an optional small language
+  model that writes field values when the decision model picks `type`.
+  `minProbability` and `minConfidence` gate a chosen operation, target,
+  secret, or assertion verdict.
+- `packages/github` — the published `@e2e-dev/github` package: the reporter
+  that posts the run as one pull request comment from GitHub Actions and
+  keeps it current on reruns, writing the same text to the job summary. It
+  reads the token, event, and repository when the run finishes, never at
+  config load, and renders the page with `renderMarkdownReport` from `e2e`.
 - `apps/testbed` (`@e2e-dev/testbed`, private) — dogfood project that
   consumes the **built** packages like a real user would: the playground app
   where every runner feature (sessions, routes, downloads, frames, uploads,
@@ -108,6 +127,14 @@ suites that consume the built packages the way a user would.
   "Committed recordings" under Gotchas. Scenario files are copies: keep
   diffs against the source minimal, and name no company a scenario was
   distilled from.
+- `examples/` — standalone user-facing projects, one per technology
+  (`with-vite`, `with-next`, `with-expo`, `with-swiftui`), each the same
+  one-screen greeter demo with deterministic and agent tests. They install
+  the published packages from npm, sit outside the pnpm workspace, commit no
+  lockfile, and run in no CI; oxlint and fallow ignore them. A change runs
+  the example's suite by hand and updates the "Last checked" line in its
+  README. A SwiftUI example keeps its tests in an `e2e/` folder beside the
+  native project, as a user would.
 - `docs/` (the Mintlify docs site; pages are the `.mdx` files under `docs/`,
   navigation, theme, and redirects in `docs/docs.json`, extra CSS in
   `docs/style.css`; `docs/examples/` is typechecked and shown verbatim on
@@ -132,7 +159,7 @@ suites that consume the built packages the way a user would.
 Build first — nearly everything downstream consumes `dist`.
 
 ```bash
-pnpm check          # lint -> check:dead-code -> typecheck -> docs:check-errors -> check:peer-ranges -> docs:check (full gate)
+pnpm check          # lint -> check:dead-code -> typecheck -> docs:check-errors -> check:peer-ranges -> check:install-scripts -> docs:check (full gate)
 pnpm test           # builds, then vitest unit + integration
 pnpm test:testbed   # builds, then runs the real CLI against the playground app
 pnpm test:web-benchmark   # builds, then runs the real CLI against the benchmark scenarios
@@ -158,7 +185,7 @@ pnpm --filter @e2e-dev/testbed run test:headed
   package `typecheck` covers `tests/**`, which is what makes
   `tests/types/sdk-types.ts` a test.
 - Integration tests need Chromium: `pnpm --filter @e2e-dev/web exec
-  playwright install chromium`. The web engine's `prepare` hook
+  playwright-core install chromium`. The web engine's `prepare` hook
   also installs a missing browser once per run, in the runner, before `plan`
   is emitted and the run's clock starts.
 
@@ -206,7 +233,7 @@ thread handled, and labeled `Ready for Human Review`. "It compiles" and
 
 ## Testing quirks
 
-- Vitest 4, `pool: 'forks'`, two projects. `integration` is capped at
+- Vitest 5, `pool: 'forks'`, two projects. `integration` is capped at
   `maxWorkers: 3` and runs in a later group — do not raise it; CPU starvation
   produces timeouts indistinguishable from real failures.
 - Integration tests write throwaway projects into
@@ -369,6 +396,13 @@ trees, on both platforms, without a device.
   commit the changed entries in the same pull request as the scenario change.
   The web benchmark's agent job runs with `--strict-cache`, so a recording a
   change broke fails with `REPLAY_STALE` instead of quietly calling the model.
+  That includes a change to the cache key (`REPLAY_POLICY_VERSION`, a new key
+  field, an engine minor): strict lists the file store and fails a step whose
+  key misses while an entry recorded for the same step sits under another key
+  (`cache/rekeyed.ts`). Only entries whose `recordedFor` names the whole step
+  (params digest, occurrence, agent) count; a `read-write` replay completes
+  an older one. Such a change re-records every entry and deletes the old ones
+  in the same pull request. A step that was never recorded still runs live.
   The web benchmark's entries are in. The mobile benchmark's iOS entries are
   recorded on a Mac; nobody has recorded on an Android emulator yet, so the
   Android side spends model calls until an emulator recording is committed.
@@ -390,8 +424,9 @@ trees, on both platforms, without a device.
     secret an engine resolves for an option the app sees (basic auth) is
     protected as text only: redacted everywhere text goes, pixels untouched.
     One exposure level per session (`SecretExposure` in `run/secrecy.ts`)
-    decides pixels, trace and download rewriting, and the taint a saved
-    session carries. What
+    decides pixels and the taint a saved session carries; traces and text
+    downloads are rewritten whenever the session's ledger holds a value
+    (`redactsRecordings`), since a plain string reaches the app unseen. What
     an executor keeps in `attempt.memory` is its own; the harness never
     reports it.
   - An agent's secret fill is authorized by the runner, not the model.
@@ -432,7 +467,9 @@ trees, on both platforms, without a device.
     sandbox with no secrets or write tokens.
 
 - CI: `.github/workflows/spec.yml` runs lint, typecheck, and the testbed on
-  Node 26 and `pnpm test` on Node 22, 24, and 26; `benchmark.yml` runs the
+  Node 26, `pnpm test` on the newest Node 22, 24, and 26 and on the
+  `engines.node` floors (22.22.3, 24.8.0), and `scripts/install-smoke.ts`, a
+  fresh install of the packed packages with pnpm 11 and 12; `benchmark.yml` runs the
   web benchmark's two suites; `mobile.yml` runs the mobile benchmark's on an
   iOS simulator and an Android emulator (KVM on x64 Linux). The two
   benchmark workflows gate on paths: a `changes` job (dorny/paths-filter
@@ -509,7 +546,7 @@ trees, on both platforms, without a device.
   needs `node scripts/restore-peer-ranges.ts` after it, or `pnpm check` fails
   on the pin.
 - The runner publishes as the unscoped `e2e` (entry points `e2e`, `e2e/agent`,
-  `e2e/engine`, `e2e/oauth/chatgpt`, `e2e/oauth/copilot`, `e2e/oauth/grok`; the bin is `e2e` too); engines, reporters, and integrations publish public
+  `e2e/engine`, `e2e/oauth/chatgpt`, `e2e/oauth/copilot`, `e2e/oauth/grok`, `e2e/oauth/opencode-console`; the bin is `e2e` too); engines, reporters, and integrations publish public
   under the `@e2e-dev` scope. The `@e2edev` scope (moved to `@e2e-dev` on
   2026-09-28), `@e2edev/e2e`, `@e2edev/oauth` (folded into `e2e/oauth` on
   2026-09-21), and `@e2e-dev/integrations` (moved to `@e2e-dev/kernel` on

@@ -8,7 +8,7 @@
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import type { Browser, Page } from 'playwright';
+import type { Browser, Page } from 'playwright-core';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { EngineAttemptContext, EngineCleanupContext, EngineFinishInfo, EngineInitInfo, EnginePrepareInfo, OperationContext, ProviderRecordContext, ProviderRecording } from 'e2e/engine';
 import { connectCdp } from '../../src/browser-connection.ts';
@@ -108,6 +108,7 @@ const prepareInfo = (slots: number, log: (line: string) => void = () => undefine
   slots,
   env,
   signal: new AbortController().signal,
+  headed: false,
   log,
 });
 const finishInfo = (log: (line: string) => void = () => undefined): EngineFinishInfo => ({
@@ -164,17 +165,14 @@ describe('web({ browser: provider })', () => {
     expect(() => web({ browser: provider({ scope: 'attempt' }).impl })).not.toThrow();
   });
 
-  it('rejects downloads that are not a directory and a read()', () => {
-    for (const downloads of [null, { dir: '', read: async () => new Uint8Array() }, { dir: '/downloads' }]) {
+  it('rejects downloads that are not a directory and a read() or whose dir is relative, and takes an absolute POSIX or Windows dir', () => {
+    const read = async () => new Uint8Array();
+    for (const downloads of [null, { dir: '', read }, { dir: '/downloads' }]) {
       expect(() => web({ browser: { ...provider().impl, downloads } as unknown as BrowserProvider })).toThrow(
         /provider "toy-cloud" has downloads that are not \{ dir, read\(\) \}/,
       );
     }
-    expect(() => web({ browser: { ...provider().impl, downloads: { dir: '/downloads', read: async () => new Uint8Array() } } })).not.toThrow();
-  });
-
-  it("rejects a relative downloads.dir, and takes an absolute one in either the POSIX or the Windows form", () => {
-    const read = async () => new Uint8Array();
+    expect(() => web({ browser: { ...provider().impl, downloads: { dir: '/downloads', read } } })).not.toThrow();
     expect(() => web({ browser: { ...provider().impl, downloads: { dir: 'downloads', read } } })).toThrow(
       /provider "toy-cloud" has downloads.dir "downloads"; name an absolute path on the browser's machine/,
     );
@@ -185,11 +183,13 @@ describe('web({ browser: provider })', () => {
     expect(() => web({ browser: provider().impl, connect: { cdpEndpoint: () => 'ws://x' } })).toThrow(/two browser sources/);
   });
 
-  it('rejects creation-time headers, credentials, and user agent with an attempt-scoped provider, as persistent connect does', () => {
+  it('rejects creation-time headers, credentials, user agent, locale, and time zone with an attempt-scoped provider, as persistent connect does', () => {
     const cloud = provider({ scope: 'attempt' }).impl;
     expect(() => web({ browser: cloud, headers: { 'x-preview': 'synthetic' } })).toThrow(/persistent context/);
     expect(() => web({ browser: cloud, basicAuth: { username: 'user', password: 'synthetic' } })).toThrow(/persistent context/);
     expect(() => web({ browser: cloud, userAgent: 'synthetic playwright' })).toThrow(/persistent context/);
+    expect(() => web({ browser: cloud, locale: 'de-DE' })).toThrow(/persistent context; locale requires/);
+    expect(() => web({ browser: cloud, timezoneId: 'Europe/Berlin' })).toThrow(/persistent context; timezoneId requires/);
     expect(() => web({ browser: provider().impl, headers: { 'x-preview': 'synthetic' } })).not.toThrow();
   });
 

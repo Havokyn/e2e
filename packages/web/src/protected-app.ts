@@ -5,7 +5,7 @@
  * context it creates; nothing here holds state.
  */
 
-import type { BrowserContext, Route } from 'playwright';
+import type { BrowserContext, Route } from 'playwright-core';
 import { sameSite, type ResolveSecretOptions, type Secret } from 'e2e/engine';
 import type { WebBasicAuth, WebNavigationPolicy } from './surface.ts';
 

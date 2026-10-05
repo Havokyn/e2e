@@ -20,6 +20,9 @@ import { defineEngine, LOCATOR_ACTION_KINDS } from '../../src/engine/index.ts';
 import { createEngineSession } from '../../src/engine/session.ts';
 import { roleQuery, testIdQuery, textQuery } from '../../src/locator/expression.ts';
 import { snapshot } from '../helpers/snapshot.ts';
+import { useFakeTime } from '../helpers/fake-time.ts';
+
+useFakeTime();
 
 const REF: NodeRef = { id: 'node-1', revision: 'rev-1' };
 const NODE: SemanticNode = { ref: REF, role: 'button', name: 'Submit' };
@@ -149,6 +152,53 @@ describe('LocatorEngine resolve retry contract', () => {
       engine.resolveExactlyOne(EXPRESSION, new Deadline(5_000)),
     ).rejects.toMatchObject({ code: 'LOCATOR_AMBIGUOUS', category: 'test' });
     expect(calls.resolve).toBe(1);
+  });
+
+  it('reports a resolve the deadline cut off, after one that matched nothing, as LOCATOR_NOT_FOUND', async () => {
+    const deadline = new Deadline(350);
+    const cut = () => {
+      throw new EngineError('OPERATION_TIMEOUT', 'locate timed out', { retryable: false });
+    };
+    const empty = () => [] as readonly NodeRef[];
+    const { engine } = makeEngine({
+      resolve: Array.from({ length: 50 }, () => () => (deadline.remaining() < 50 ? cut() : empty())),
+    });
+    await expect(engine.resolveExactlyOne(EXPRESSION, deadline)).rejects.toMatchObject({
+      code: 'LOCATOR_NOT_FOUND',
+      cause: { code: 'ACTION_FAILED', message: expect.stringContaining('operation timed out') },
+    });
+  });
+
+  it('keeps a resolve that hung with budget to spare a timeout, never a missing node', async () => {
+    const deadline = new Deadline(600);
+    let calls = 0;
+    const { engine } = makeEngine({
+      resolve: Array.from({ length: 50 }, () => async () => {
+        calls += 1;
+        if (calls === 1) return [] as readonly NodeRef[];
+        await new Promise((resolve) => setTimeout(resolve, deadline.remaining()));
+        throw new EngineError('OPERATION_TIMEOUT', 'locate timed out', { retryable: false });
+      }) as unknown as Array<() => readonly NodeRef[]>,
+    });
+    await expect(engine.resolveExactlyOne(EXPRESSION, deadline)).rejects.toMatchObject({ code: 'ACTION_FAILED' });
+  });
+
+  it('ends a frame wait the deadline cut off on the missing frame, as LOCATOR_NOT_FOUND', async () => {
+    const deadline = new Deadline(350);
+    const { engine } = makeEngine({
+      resolve: Array.from({ length: 50 }, () => () => {
+        if (deadline.remaining() < 50) throw new EngineError('OPERATION_TIMEOUT', 'locate timed out', { retryable: false });
+        throw new EngineError('FRAME_NOT_FOUND', 'frame missing', { retryable: true });
+      }),
+    });
+    await expect(engine.resolveExactlyOne(EXPRESSION, deadline)).rejects.toMatchObject({ code: 'LOCATOR_NOT_FOUND', message: expect.stringContaining('frame missing') });
+  });
+
+  it('keeps a first resolve the deadline cut off a timeout: nothing was ever seen missing', async () => {
+    const { engine } = makeEngine({
+      resolve: [() => { throw new EngineError('OPERATION_TIMEOUT', 'locate timed out', { retryable: false }); }],
+    });
+    await expect(engine.resolveExactlyOne(EXPRESSION, new Deadline(0))).rejects.toMatchObject({ code: 'ACTION_FAILED' });
   });
 
   it('polls zero matches until the deadline, then LOCATOR_NOT_FOUND', async () => {
@@ -365,7 +415,7 @@ describe('translateLocatorError mapping table', () => {
       EXPRESSION,
     );
     expect(translated.message).toContain('stale');
-    expect(translated.message.length).toBeGreaterThan('node became stale'.length);
+    expect(translated.message).toMatch(/: getByRole\("button"\)$/);
   });
 });
 

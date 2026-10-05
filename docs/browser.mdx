@@ -1,6 +1,7 @@
 ---
 title: Working with the browser
 description: Mock an API, handle a dialog, download a file, reach into an iframe, and pick a browser.
+icon: "window-maximize"
 ---
 
 `@e2e-dev/web` runs tests in Chromium, Firefox, and WebKit. It is built on
@@ -116,6 +117,25 @@ const flag = await browser.evaluate((name: string) => window.localStorage.getIte
 Use `evaluate` for state that `screen` cannot read. Prefer locators and
 assertions for visible UI so tests depend less on the DOM structure.
 
+## Run a script before the page
+
+An init script runs in every document before the page's own scripts: mock a
+browser API, seed `Math.random`, or set a flag the app reads at boot. For every
+test:
+
+```ts
+web({ initScripts: [{ path: 'tests/init.js' }] })
+```
+
+For one test, before the page opens:
+
+```ts
+await browser.addInitScript((value) => { Math.random = () => value; }, 0.5);
+await app.open('/raffle');
+```
+
+See [init scripts](/reference/web#init-scripts).
+
 ## Cookies
 
 ```ts
@@ -125,7 +145,7 @@ await browser.setCookies([{ url: 'http://localhost:3000', name: 'tz', value: 'UT
 A cookie URL that does not parse, or uses a scheme other than `http:` or
 `https:` (`about:blank` included), is `POLICY_DENIED`; a domain cookie is checked as the origin
 it would be sent to. If any entry is refused, no cookies are set. To resize
-the page, see [Testing viewports](/viewports).
+the page, see [Viewports](/web#viewports).
 
 ## Pick a browser
 
@@ -146,10 +166,25 @@ export default {
 } satisfies E2EConfig;
 ```
 
-`npx playwright install webkit --with-deps` provisions the extra browser in
-CI. `connect` attaches to a remote Chromium over CDP instead of launching
+In CI, provision the extra browser with the [install command](/reference/web#installing-browsers):
+
+<CodeGroup>
+```bash npm
+npx @e2e-dev/web install webkit --with-deps
+```
+
+```bash pnpm
+pnpm exec e2e-web install webkit --with-deps
+```
+
+```bash bun
+bunx @e2e-dev/web install webkit --with-deps
+```
+</CodeGroup>
+
+`connect` attaches to a remote Chromium over CDP instead of launching
 one; a [browser provider](#hosted-browsers) does the same and also leases
-and releases the browser. [Testing viewports](/viewports) covers sizes.
+and releases the browser. [Viewports](/web#viewports) covers sizes.
 
 ## Hosted browsers
 
@@ -163,7 +198,7 @@ when the run no longer uses it. The engine knows no vendor: for
 provider, and for any other service a provider is a few dozen lines in your
 project. Add `viewport: null` when
 the service shows the window in a live view: the page then
-[fills the window](/viewports#fill-the-window) instead of a fixed 1280 by
+[fills the window](/web#fill-the-window) instead of a fixed 1280 by
 720 area of it.
 
 ```ts
@@ -239,7 +274,7 @@ The attempt runs in the browser's persistent default context, on the
 browser's own first tab, so the remote must contain only that context, and
 the limits of
 [`connect.reconnectEndpoint`](/reference/web#recovering-a-cdp-transport)
-apply: no `headers`, `basicAuth`, or `userAgent` (each is `INVALID_CONFIG`), no
+apply: no `headers`, `basicAuth`, `userAgent`, `locale`, or `timezoneId` (each is `INVALID_CONFIG`), no
 `app.clearState()` (`UNSUPPORTED_CAPABILITY` naming the scope), and no session
 state capture or restore, so a run whose tests consume a
 [session](/authentication) on the target fails with `COLLECTION_ERROR`
@@ -251,7 +286,7 @@ same browser.
 A provider against a typical session API has three requests: create a
 session, poll it until it exposes a DevTools endpoint, stop it.
 
-```ts title="browser-provider.ts"
+```ts title="browser-provider.ts" expandable
 import type { BrowserProvider } from '@e2e-dev/web';
 
 /**
@@ -436,7 +471,7 @@ root declared in HTML (`<template shadowrootmode="closed">`) is out of reach.
   <Card title="Web engine reference" icon="masks-theater" href="/reference/web">
     Every `browser` method, its timeout, and what it throws.
   </Card>
-  <Card title="Starting your app" icon="play" href="/starting-your-app">
-    Let the runner start the dev server and reach protected previews.
+  <Card title="Web" icon="play" href="/web">
+    Let the runner start the dev server, reach protected previews, and test viewports.
   </Card>
 </CardGroup>

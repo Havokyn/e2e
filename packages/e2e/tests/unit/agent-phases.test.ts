@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { checkStepClock, instrumentPhase, retryingObserve } from '../../src/agent/phases.ts';
 import type { Observation } from '../../src/engine/surface.ts';
 import { Deadline } from '../../src/internal/time.ts';
@@ -30,7 +30,13 @@ const OBSERVATION: Observation = {
 const operation = () => ({ runId: 'run', attemptId: 'attempt', timeoutMs: 1_000, signal: new AbortController().signal, origin: 'agent' as const });
 
 describe('retryingObserve', () => {
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   it('re-reads after a retryable race reported by an engine from another module registry', async () => {
+    vi.useFakeTimers();
+    vi.setTimerTickMode('nextTimerAsync');
     let attempts = 0;
     const observation = await retryingObserve({
       observe: () => {
@@ -43,6 +49,8 @@ describe('retryingObserve', () => {
       guard: () => undefined,
       signal: new AbortController().signal,
       api: 'agent.act',
+      fallback: false,
+      tainted: () => false,
     });
     expect(observation).toBe(OBSERVATION);
     expect(attempts).toBe(3);
@@ -60,9 +68,60 @@ describe('retryingObserve', () => {
         guard: () => undefined,
         signal: new AbortController().signal,
         api: 'agent.act',
+        fallback: false,
+      tainted: () => false,
       }),
     ).rejects.toThrow('OPERATION_TIMEOUT');
     expect(attempts).toBe(1);
+  });
+
+  it('denies a capture timeout that only fallback pixels withheld after a secret fill could have answered', async () => {
+    await expect(
+      retryingObserve({
+        observe: () => Promise.reject(foreignEngineError('OPERATION_TIMEOUT', false)),
+        operation,
+        guard: () => undefined,
+        signal: new AbortController().signal,
+        api: 'agent.act',
+        fallback: true,
+        tainted: () => true,
+      }),
+    ).rejects.toMatchObject({ code: 'POLICY_DENIED', message: expect.stringContaining('a secret was filled in this attempt') });
+  });
+
+  it('reads the taint per capture, so a retry after a secret fill asks for no fallback and is denied', async () => {
+    let tainted = false;
+    const requested: boolean[] = [];
+    await expect(
+      retryingObserve({
+        observe: (_operation, pixelFallback) => {
+          requested.push(pixelFallback);
+          tainted = true;
+          return Promise.reject(foreignEngineError(requested.length === 1 ? 'NODE_STALE' : 'OPERATION_TIMEOUT', requested.length === 1));
+        },
+        operation,
+        guard: () => undefined,
+        signal: new AbortController().signal,
+        api: 'agent.act',
+        fallback: true,
+        tainted: () => tainted,
+      }),
+    ).rejects.toMatchObject({ code: 'POLICY_DENIED' });
+    expect(requested).toEqual([true, false]);
+  });
+
+  it('reports the step clock, not the denial, when the capture timed out at the deadline', async () => {
+    await expect(
+      retryingObserve({
+        observe: () => Promise.reject(foreignEngineError('OPERATION_TIMEOUT', false)),
+        operation,
+        guard: (cause) => checkStepClock({ signal: new AbortController().signal, deadline: new Deadline(50), api: 'agent.act', timeoutMs: 3_000, cause }),
+        signal: new AbortController().signal,
+        api: 'agent.act',
+        fallback: true,
+        tainted: () => true,
+      }),
+    ).rejects.toMatchObject({ code: 'STEP_TIMEOUT' });
   });
 });
 

@@ -166,7 +166,8 @@ export const FLOWS: readonly Flow[] = [
   },
   {
     title: 'fills the twins form',
-    open: (variant) => (variant === 'replay' ? '/twins-form?variant=b' : '/twins-form'),
+    // The replay run renders the `b` variant (`FixtureApp.setVariant`) under the recorded URL.
+    open: () => '/twins-form',
     body: `  await agent.act('fill in the twins form');
   await expect(screen.getByRole('status', { name: 'Summary' })).toHaveText('nickname=ada motto=carpe diem first=quill second=ember picked=2');`,
     script: {
@@ -190,7 +191,8 @@ export const FLOWS: readonly Flow[] = [
   },
   {
     title: 'reserves offer B',
-    open: (variant) => (variant === 'replay' ? '/repeats?reverse=1' : '/repeats'),
+    // The replay run renders the `b` variant, the offers reversed, under the recorded URL.
+    open: () => '/repeats',
     body: `  await agent.act('reserve offer B');
   await expect(screen.getByRole('status', { name: 'Picked' })).toHaveText('B');`,
     script: {
@@ -200,6 +202,22 @@ export const FLOWS: readonly Flow[] = [
       },
     },
     actions: [1],
+  },
+  {
+    title: 'clears a field',
+    open: () => '/clear-field',
+    body: `  await agent.act('type a draft, then clear it');
+  await expect(screen.getByRole('status', { name: 'Draft state' })).toHaveText('cleared');`,
+    script: {
+      'type a draft, then clear it': {
+        act: (call) => {
+          const draft = nodeIdFor(call.prompt, /textbox "Draft"/u);
+          return [type(draft, 'draft'), type(draft, '')];
+        },
+        done: /"Draft state" text="cleared"/u,
+      },
+    },
+    actions: [2],
   },
   {
     title: 'mixes deterministic and agent steps',

@@ -41,7 +41,10 @@ import { runUnits } from './scheduler.ts';
 import { buildWorkPlans, plannedSlots, type TargetWorkPlan } from './units.ts';
 import { SessionStore } from './sessions.ts';
 import { outputLayout } from './output.ts';
-import { lastFailedIds, readLastRun } from './last-run.ts';
+import type { RunnerOutput } from './process-output.ts';
+import { registerStaticSecrets } from './secrecy.ts';
+import { claimRerunDir, pruneArtifacts } from './artifacts.ts';
+import { carryForward, lastFailedIds, readLastRun, reportArtifactPaths, type RerunCollection } from './last-run.ts';
 import { childProcessSpawner } from './worker/handle.ts';
 import { setSecretRegistry } from '../secrets.ts';
 import { withAbort } from '../internal/time.ts';
@@ -155,6 +158,13 @@ export interface RunOptions {
   onEvent?: RunEventSink | undefined;
   /** Budget for each reporter's `onRunFinished`, in ms. Only the test harness sets it; there is no flag. */
   reporterTimeout?: number | undefined;
+  /**
+   * The process's stdout and stderr, when the caller claimed them (the CLI):
+   * what user code in this process prints is held while the config loads
+   * and shown through the list reporter while the run reports, and the list
+   * reporter writes to the terminal past it.
+   */
+  processOutput?: RunnerOutput | undefined;
 }
 
 /**
@@ -331,8 +341,17 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   //
   // Free ports for URLs declared with port 0 are chosen here, once: workers
   // re-resolve the config and get the assignments in their bootstrap.
+  //
+  // The config's secrets are known to the process before what its top-level
+  // code printed is released, so that output is redacted like any other.
+  const loadConfig = async (): Promise<ResolvedConfig> => {
+    const config = await loadRunConfig(options, cwd, env, cli);
+    registerStaticSecrets(config.allSecrets);
+    return allocateAppPorts(config);
+  };
+  const processOutput = options.processOutput;
   const loaded = await debug
-    .time('config.load', () => loadRunConfig(options, cwd, env, cli).then(allocateAppPorts))
+    .time('config.load', () => (processOutput === undefined ? loadConfig() : processOutput.withholdDuring(loadConfig)))
     .then(
       (config) => ({ config, error: undefined }),
       (cause: unknown) => ({ config: undefined, error: classifyError(cause) }),
@@ -343,7 +362,13 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   // the CLI asked for, so the failure renders through them.
   const reporterIds = loaded.config?.reporters ?? options.reporters ?? ['list'];
   const listReporter =
-    options.quiet === true || !reporterIds.includes('list') ? undefined : new ListReporter();
+    options.quiet === true || !reporterIds.includes('list') ? undefined : new ListReporter(processOutput?.listOutput);
+  // Until the run is over, what user code prints lands above the live window.
+  processOutput?.showThrough(
+    listReporter === undefined
+      ? undefined
+      : { show: (stream, text) => listReporter.processOutput(stream, text), end: () => listReporter.endProcessOutput() },
+  );
   const activeReporters: readonly Reporter[] = [
     ...(listReporter === undefined ? [] : [listReporter]),
     ...reporterIds.filter((id) => id !== 'list').map((id) => STATELESS_REPORTERS[id]),
@@ -393,7 +418,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   };
 
   /**
-   * The exit code is a fold over run state — every result, every run error,
+   * The exit code is a fold over run state — every result and serial group, every run error,
    * the interrupt — never threaded through by hand. A run error recorded
    * anywhere, including during teardown or the report write, reaches the exit
    * code the same way.
@@ -401,7 +426,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   const currentExitCode = (): RunExitCode =>
     combineExitCodes(
       [
-        ...resultExitCodes(results),
+        ...verdictExitCodes(results, serialGroups),
         ...(loaded.config?.failOnSkippedFailure === true && someSkippedAfterFailure(results, serialGroups) ? [1] : []),
         ...runErrors.map((runError) => exitCodeForCategory(runError.error.category)),
         ...(interruptController.signal.aborted ? [130] : []),
@@ -411,8 +436,16 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
   // Detected once the config names the project root; a report written before
   // that (a config failure) has no checkout to describe.
   let vcs: VcsInfo | undefined;
-  const buildRunReport = (exitCode: RunExitCode): Report1Document =>
-    buildReport({
+  // The report `--last-failed` selected from, once collection has read it;
+  // reporters get it beside this run's report to fold the rerun into it, and
+  // this run's report carries what it owed that this run left out.
+  let lastRun: Report1Document | undefined;
+  // The ids of every test collection found, a setup no selected test needed
+  // among them, and the files it could not collect: what a rerun can still
+  // carry when the report lists no row.
+  let rerunCollection: RerunCollection = { testIds: new Set(), uncollectedFiles: new Set() };
+  const buildRunReport = (exitCode: RunExitCode): Report1Document => {
+    const document = buildReport({
       runId,
       config: loaded.config,
       vcs,
@@ -425,6 +458,9 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       targetProvenance,
       explore: options.tests?.explore?.snapshot(),
     });
+    const carried = lastRun === undefined ? undefined : carryForward(lastRun, document, rerunCollection);
+    return carried === undefined ? document : { ...document, run: { ...document.run, carried } };
+  };
 
   /**
    * Writes the canonical report and returns its path only once the file
@@ -485,9 +521,6 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     }
   };
 
-  // The report `--last-failed` selected from, once collection has read it;
-  // reporters get it beside this run's report to fold the rerun into it.
-  let lastRun: Report1Document | undefined;
   /**
    * Whether the run got as far as its tests. Only such a run writes into the
    * output directory: one that stopped before leaves the previous run's
@@ -518,6 +551,9 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
       ...(reportPath === undefined ? {} : { reportPath }),
       ...(aiTracePath === undefined ? {} : { aiTracePath }),
     });
+    // The list reporter has printed its summary and stopped its window; a
+    // line another reporter left unfinished on `run-finished` prints too.
+    processOutput?.showThrough(undefined);
     if (debug.enabled) {
       process.stderr.write(debug.summary());
       process.stderr.write(agentStepTable(results, serialGroups));
@@ -616,6 +652,10 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
                 );
           const inputs = await selectionInputs(options, config);
           lastRun = inputs.lastRun;
+          rerunCollection = {
+            testIds: new Set(collection.tests.map((test) => test.id)),
+            uncollectedFiles: new Set(collection.uncollected.map((skipped) => skipped.file)),
+          };
           const selection = repeatEach(
             select(
               collection,
@@ -672,7 +712,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // of a worker's stderr fighting the live status block.
     try {
       plans = await debug.time('engine.prepare', () =>
-        prepareEngines(plans, runWorkers, engines, { runId, projectRoot: config.projectRoot, env, signal: interrupted, notice }, emit),
+        prepareEngines(plans, runWorkers, engines, { runId, projectRoot: config.projectRoot, env, signal: interrupted, headed: options.headed ?? false, notice }, emit),
       );
     } catch (cause) {
       if (!interrupted.aborted) recordFailure(cause, 'launch');
@@ -714,15 +754,25 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
     // Tests are about to start, and only now is the previous run's evidence
     // given up: the artifact tree is emptied, so what is there once this run
     // ends is its own and nothing a report no longer names, and this run's
-    // report replaces the last. A run that stopped before here (no test
-    // selected, a collection error, a target that cannot record what it asks,
-    // an app that failed to start, an interrupt) leaves both, and
+    // report replaces the last. A `--last-failed` rerun keeps the evidence
+    // the report it reruns names instead, since that report's results fold
+    // into the rerun's and its carried tests do not run again, and files its
+    // own attempts in a fresh `rerun-<n>` directory beside it, so no attempt
+    // overwrites an earlier one's files. A run that stopped before here (no
+    // test selected, a collection error, a target that cannot record what it
+    // asks, an app that failed to start, an interrupt) leaves both, and
     // `--last-failed` still reads the run that executed. A wipe that fails
     // part way has already given up the old evidence, so this run's report
     // records the failure.
     testsStarted = true;
+    let rerunDir: string | undefined;
     try {
-      await rm(layout.artifacts, { recursive: true, force: true });
+      if (lastRun === undefined) {
+        await rm(layout.artifacts, { recursive: true, force: true });
+      } else {
+        await pruneArtifacts(layout.artifacts, reportArtifactPaths(lastRun));
+        rerunDir = await claimRerunDir(layout.artifacts);
+      }
     } catch (cause) {
       recordFailure(cause, 'launch');
       return;
@@ -748,6 +798,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             inMemory: options.tests,
             runId,
             artifactsRoot,
+            rerunDir,
             sessionStore: store,
             headed: options.headed ?? false,
             debug,
@@ -761,6 +812,7 @@ export async function run(options: RunOptions = {}): Promise<RunOutcome> {
             ports: config.ports,
             runId,
             artifactsRoot,
+            rerunDir,
             headed: options.headed ?? false,
             sessionsRoot: layout.sessions,
             sessionKeyBase64: store.exportKeyForWorker(),
@@ -1021,14 +1073,20 @@ function statusOf(exitCode: RunExitCode): Exclude<RunStatus, 'blocked'> {
   return exitCode === 0 ? 'passed' : exitCode === 1 ? 'failed' : exitCode === 130 ? 'interrupted' : 'error';
 }
 
-function resultExitCodes(results: readonly ResultRecord[]): number[] {
+/**
+ * The exit codes the verdicts imply: a failed test or serial group exits 1,
+ * or its attempts' error category when that is worse. A serial group answers
+ * for its members, whose results carry no attempts, and for a group attempt
+ * that failed before any member ran (a launch), whose members are skipped.
+ */
+function verdictExitCodes(results: readonly ResultRecord[], serialGroups: readonly SerialGroupRecord[]): number[] {
   const codes: number[] = [0];
-  for (const result of results) {
-    switch (result.status) {
+  for (const verdict of [...results, ...serialGroups]) {
+    switch (verdict.status) {
       case 'failed':
       case 'timed-out':
         codes.push(1);
-        for (const attempt of result.attempts) {
+        for (const attempt of verdict.attempts) {
           if (attempt.error !== undefined) codes.push(exitCodeForCategory(attempt.error.category));
         }
         break;

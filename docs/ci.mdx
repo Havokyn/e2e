@@ -1,13 +1,14 @@
 ---
 title: Continuous integration
 description: Run tests on pull requests, upload reports, and configure model credentials in CI.
+icon: "rotate"
 ---
 
 Run deterministic and agent tests in the same CI job. This workflow assumes
-your config includes a [command](/starting-your-app) to start the app and
+your config includes a [command](/web#starting-your-app) to start the app and
 uses AI Gateway for model calls:
 
-```yaml title=".github/workflows/e2e.yml"
+```yaml title=".github/workflows/e2e.yml" expandable
 name: e2e
 
 on:
@@ -35,7 +36,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
 
       - name: Install browsers
-        run: npx playwright install chromium --with-deps
+        run: pnpm exec e2e-web install chromium --with-deps
 
       - name: Run e2e
         run: npx e2e run --reporter list,junit
@@ -66,7 +67,9 @@ jobs:
 ```
 
 The workflow pins actions to commit SHAs and installs dependencies from the
-lockfile. `npx e2e` runs the installed version.
+lockfile. `npx e2e` runs the installed version. The
+[install command](/reference/web#installing-browsers) downloads the browsers
+for the Playwright version the engine pins, with their system libraries.
 
 Artifacts upload on every run that is not cancelled, so a test that failed
 and then passed on retry still has its evidence.
@@ -139,10 +142,12 @@ implemented yet.
 
 `--last-failed` runs only the tests the previous run did not pass, read from
 `report.json` in the [`output`](/reference/config#output) directory (`.e2e`
-by default). The rerun empties `artifacts/` there when it starts, so
-upload the first run's artifacts before rerunning in the same job if you want
-both. The [CLI reference](/reference/cli#flags) lists what counts as not
-passed. Locally it is the loop after a red run:
+by default). The rerun keeps the artifacts the first run's report names and
+writes its own under `artifacts/rerun-1/`, so one upload after both steps
+holds the evidence of each. A test another filter keeps out of the rerun
+stays owed: the next `--last-failed` runs it. The
+[CLI reference](/reference/cli#flags) lists what counts as not passed.
+Locally it is the loop after a red run:
 
 <CodeGroup>
 ```bash npm

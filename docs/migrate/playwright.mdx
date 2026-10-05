@@ -1,10 +1,33 @@
 ---
 title: From Playwright
 description: Run e2e alongside Playwright and migrate tests one file at a time.
+icon: "/images/icons/playwright.svg"
 ---
 
-`@e2e-dev/web` uses your installed Playwright when its version satisfies
-the engine's peer dependency (`>=1.63.0 <2`). Both runners can stay in one
+import { SetupPrompt } from '../snippets/setup-prompt-card.jsx';
+
+export const migrationPrompt = `Migrate this project's Playwright tests to e2e, one spec at a time. Docs: \`https://e2e.tester.army/docs/migrate/playwright.md\`
+
+1. Read the migration guide above. It maps every Playwright config key, API, and CLI flag to e2e and marks what e2e does not have yet.
+2. If the project has no e2e config (\`e2e.config.ts\` or \`e2e.config.mts\`), run \`npx e2e init --yes\` (or the pnpm or bun equivalent). It writes a config and an example test, and installs nothing yet.
+3. Read the e2e skill (\`npx e2e guide\` prints it, \`npx e2e guide <topic>\` prints a topic) and follow it for every step below.
+4. If you ran init, ask me which model to use for agent steps: a ChatGPT, GitHub Copilot, OpenCode Console, or SuperGrok subscription, an API key, or a local model. Configure it with its provider package. If it needs a sign-in, give me the \`npx e2e login\` command and wait until I confirm.
+5. Port \`playwright.config.ts\` into the e2e config with the guide's Config tables. \`baseURL\` and \`webServer\` become the target's \`app\`, \`projects\` become \`targets\`, and browser options under \`use\` (viewport, locale, testIdAttribute) become \`web(...)\` options; \`trace\`, \`video\`, and the timeouts are top-level keys. Keep \`@playwright/test\` installed and the two file patterns apart.
+6. Install dependencies.
+7. List the Playwright specs and ask me which one to move first. Suggest a flow whose steps change often, such as a wizard or a checkout.
+8. Rewrite that spec as a \`.e2e.ts\` file under \`tests/\` (e2e runs \`tests/**/*.e2e.ts\` by default). Map each \`page\` call to \`screen\`, \`app\`, or \`browser\` with the guide. String names in e2e queries match the whole text, case-sensitive, so add \`{ exact: false }\` or a RegExp where the Playwright query matched a fragment. Where the guide marks a feature missing, use the workaround it gives, or leave that test in Playwright and tell me why.
+9. Keep navigation and the final assertions deterministic, with \`app.open()\` and locator assertions. Where a run of scripted interactions breaks often, propose an \`agent.act\` goal for it instead.
+10. Run the new file with \`npx e2e run <file>\` and fix it until it passes. Keep the Playwright spec until I confirm it can go.
+11. Summarize which tests moved, which stayed in Playwright, and why.`;
+
+<SetupPrompt>
+
+<Prompt description={migrationPrompt} children={migrationPrompt} actions={["copy", "cursor"]} />
+
+</SetupPrompt>
+
+`@e2e-dev/web` brings its own pinned `playwright-core`, so your
+`@playwright/test` version is yours to keep. Both runners can stay in one
 project. e2e reads `e2e.config.ts` and finds `tests/**/*.e2e.ts` by default,
 so keep the two file patterns apart.
 
@@ -27,7 +50,7 @@ A Playwright key the runner recognizes (`testDir`, `baseURL`, `webServer`,
 | Playwright | e2e | Status |
 | --- | --- | --- |
 | `use.baseURL` | `app: { url }` on the target | renamed |
-| `webServer` | `app: { url, command }` on the target, see [Starting your app](/starting-your-app) | renamed |
+| `webServer` | `app: { url, command }` on the target, see [Starting your app](/web#starting-your-app) | renamed |
 | `webServer` array | `app: { url, command }` on each target; targets declaring the same command share one process. Other dependency processes are not started by this version | missing |
 | `webServer.reuseExistingServer` | `app.command: { reuseExisting: true }`; CI ignores it | renamed |
 | `globalSetup`, `globalTeardown` | not yet; `test.setup` for sign-in, hooks and fixtures for setup code | missing |
@@ -59,7 +82,8 @@ A Playwright key the runner recognizes (`testDir`, `baseURL`, `webServer`,
 | `use.trace` | `trace` with the same modes (`'off'`, `'on'`, `'retain-on-failure'`, `'on-first-retry'`, `'on-all-retries'`), at the top of the config, per target, `test('x', { trace }, ...)`, or `--trace [mode]` for one run; the default differs, see [below](#defaults-that-differ) | same |
 | `use.video` | `video` with the same modes as `trace`, at the top of the config, per target in place of a project, `test('x', { video }, ...)` in place of `test.use`, or `--video [mode]` for one run | same |
 | `use.headless: false` | `--headed` on the CLI | renamed |
-| `use.locale`, `timezoneId`, `colorScheme`, `geolocation`, `permissions` | not yet | missing |
+| `use.locale`, `use.timezoneId` | `web({ locale, timezoneId })` | renamed |
+| `colorScheme`, `geolocation`, `permissions` | not yet | missing |
 | `use.userAgent` | `web({ userAgent })` | renamed |
 | `devices['iPhone 15']`, `deviceScaleFactor`, `isMobile`, `hasTouch` | not yet; `web({ viewport })` sets the size only | missing |
 | `ignoreHTTPSErrors`, `bypassCSP`, `offline`, `launchOptions`, `proxy` | not yet | missing |
@@ -139,7 +163,8 @@ what to do today.
 | `fill(value)` | the same; also takes a `Secret` | same |
 | `pressSequentially(text, { delay })` | the same; keystrokes through the platform keyboard, a `Secret` is refused | same |
 | `press(key)` | the same; modifiers join with `+`, see the [key grammar](/reference/engine#keys) | same |
-| `clear()`, `check()`, `uncheck()`, `focus()`, `hover()`, `setInputFiles()`, `dragTo()` | the same | same |
+| `clear()`, `focus()`, `hover()`, `setInputFiles()`, `dragTo()` | the same | same |
+| `check()`, `uncheck()` | the same, except for a control the click removes or navigates away from, such as a radio the app replaces with its selected view: the click landed, so the action passes, even when the app renders an unchecked control in its place. Playwright fails it because it cannot read the state back. Assert on what replaced the control | by design |
 | `selectOption('pro')` | `selectOption('Pro')`: a string matches the option's label only, where Playwright matches its value or its label; `selectOption({ value: 'pro' })` for the value | by design |
 | `selectOption(['a', 'b'])` | not yet; one option per call. An array is `INVALID_ARGUMENT` | missing |
 | `setInputFiles({ name, buffer })` | not yet; paths only, resolved from the project root | missing |
@@ -232,10 +257,11 @@ what to do today.
 | `page.waitForEvent('popup')`, `context.on('page')` | not yet; a window the app opens is not driven | missing |
 | `page.on('console')`, `page.on('pageerror')` | not yet; assert on what the page shows | missing |
 | `page.evaluate(fn, arg)` | `browser.evaluate(fn, arg)`; JSON in and out, no handles | web only |
-| `page.exposeFunction()`, `addInitScript()`, `addStyleTag()`, `setExtraHTTPHeaders()`, `emulateMedia()`, `clock` | not yet; `browser.evaluate` appends a `<style>` once the page is open, and returns `null` since its result must be JSON | missing |
+| `page.addInitScript(script, arg)`, `context.addInitScript()` | `browser.addInitScript(script, arg)`, or `web({ initScripts })` for every test; pass `{ content }` as a plain string | web only |
+| `page.exposeFunction()`, `addStyleTag()`, `setExtraHTTPHeaders()`, `emulateMedia()`, `clock` | not yet; `browser.evaluate` appends a `<style>` once the page is open, and returns `null` since its result must be JSON | missing |
 | `context.addCookies()`, `context.cookies()` | `browser.setCookies()`, `browser.cookies()` | web only |
 | `context.clearCookies()` | not yet; `app.clearState()` also clears other persisted state and recreates the context | missing |
-| `request` fixture | Node `fetch`, see [Testing APIs](/api-testing) | by design |
+| `request` fixture | Node `fetch`, see [API](/api-testing) | by design |
 | `context.storageState({ path })` | not yet; sessions are per run and encrypted, see [By design](#by-design) | by design |
 
 ### Test structure
@@ -284,9 +310,9 @@ what to do today.
 | `--update-snapshots` | no equivalent; there is no pixel assertion | missing |
 | `--list` | `npx e2e list`, with the same selection flags | renamed |
 | `npx playwright codegen` | `npx e2e explore` walks the app from a goal and reports what it found; `npx e2e mcp` gives a coding agent a live session so it writes the test while driving the app, see [Coding agents](/coding-agents) | renamed |
-| `npx playwright show-trace` | the same, on `trace/<name>.zip` under the attempt's artifact directory | same |
+| `npx playwright show-trace` | `npx playwright-core@1.63.0 show-trace` (`pnpm dlx` under pnpm), on `trace/<name>.zip` under the attempt's artifact directory | renamed |
 | `npx playwright show-report` | not yet; `.e2e/summary.md` from the `markdown` reporter | missing |
-| `npx playwright install` | still works; the engine also installs a missing browser once per run, before the run's clock starts | same |
+| `npx playwright install` | `npx @e2e-dev/web install`, for the Playwright version the engine pins; the engine also installs a missing browser once per run, before the run's clock starts | renamed |
 
 ## Page objects
 
@@ -421,8 +447,8 @@ Start with a flow whose interaction sequence changes often, such as a wizard
 or checkout; stable Playwright tests can stay where they are.
 
 <CardGroup cols={2}>
-  <Card title="Goals" icon="pen-to-square" href="/goals">
-    Write test steps as goals instead of scripted selectors.
+  <Card title="Core concepts" icon="pen-to-square" href="/core-concepts">
+    Goals, assertions, and locators instead of scripted selectors.
   </Card>
   <Card title="Web engine reference" icon="masks-theater" href="/reference/web">
     Every option and every `browser` method.

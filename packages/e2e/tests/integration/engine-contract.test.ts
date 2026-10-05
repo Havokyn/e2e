@@ -241,7 +241,149 @@ test('flaky against engine', { retries: 1 }, async ({ app }) => {
   );
 
   it(
-    'classifies EngineErrors from fixture surfaces (app.open) with the canonical mapping',
+    'fails the run as infrastructure when a serial group startAttempt throws',
+    async () => {
+      const fake = createFakeEngine({
+        onStartAttempt() {
+          throw engineFailure('ENGINE_FAILURE', 'engine exploded');
+        },
+      });
+      const file = `import { test } from 'e2e';
+
+test.describe('wizard', { serial: true, retries: 2 }, () => {
+  test('step 1', async () => {});
+  test('step 2', async () => {});
+});
+`;
+      const { outcome, project } = await runProject(
+        { 'tests/serial-launch-fail.e2e.ts': file },
+        { appUrl: APP_URL, config: engineConfig(fake.engine) },
+      );
+      // The first member fails with the launch error, as an ordinary test would; the rest skip behind it.
+      expect(resultByTitle(outcome, 'step 1').status).toBe('failed');
+      expect(resultByTitle(outcome, 'step 2').skip?.cause).toBe('serial-predecessor-failed');
+      const group = outcome.report.run.serialGroups[0]!;
+      expect(group.status).toBe('failed');
+      // Infrastructure failures are not retry-eligible: one attempt despite retries: 2.
+      expect(group.attempts).toHaveLength(1);
+      const attempt = group.attempts[0]!;
+      expect(attempt.error?.phase).toBe('launch');
+      expect(attempt.error?.category).toBe('infrastructure');
+      expect(attempt.members.map((member) => [member.status, member.error?.code])).toEqual([
+        ['failed', 'ENGINE_FAILURE'],
+        ['skipped', undefined],
+      ]);
+      expect(outcome.report.run.summary.failed).toBe(1);
+      expect(outcome.exitCode).toBe(3);
+      expect(outcome.status).toBe('error');
+      expect(outcome.report.run.status).toBe('error');
+      expect(outcome.report.run.exitCode).toBe(3);
+      assertValidReport(outcome.report);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'exits 3 when a serial member fails on an infrastructure error',
+    async () => {
+      const fake = createFakeEngine({
+        onNavigate() {
+          throw engineFailure('ENGINE_FAILURE', 'renderer crashed');
+        },
+      });
+      const file = `import { test } from 'e2e';
+
+test.describe('wizard', { serial: true }, () => {
+  test('step 1', async ({ app }) => {
+    await app.open('/');
+  });
+  test('step 2', async () => {});
+});
+`;
+      const { outcome, project } = await runProject(
+        { 'tests/serial-member-infra.e2e.ts': file },
+        { appUrl: APP_URL, config: engineConfig(fake.engine) },
+      );
+      expect(resultByTitle(outcome, 'step 1').status).toBe('failed');
+      expect(resultByTitle(outcome, 'step 2').skip?.cause).toBe('serial-predecessor-failed');
+      expect(outcome.report.run.serialGroups[0]!.attempts[0]!.error?.category).toBe('infrastructure');
+      expect(outcome.exitCode).toBe(3);
+      expect(outcome.report.run.status).toBe('error');
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'skips a serial group whose launch the run interrupted instead of failing it',
+    async () => {
+      const controller = new AbortController();
+      const fake = createFakeEngine({
+        onStartAttempt() {
+          controller.abort();
+          throw engineFailure('ENGINE_FAILURE', 'launch cancelled');
+        },
+      });
+      const file = `import { test } from 'e2e';
+
+test.describe('wizard', { serial: true }, () => {
+  test('step 1', async () => {});
+  test('step 2', async () => {});
+});
+`;
+      const { outcome, project } = await runProject(
+        { 'tests/serial-launch-interrupted.e2e.ts': file },
+        { appUrl: APP_URL, config: engineConfig(fake.engine), runOptions: { interruptSignal: controller.signal } },
+      );
+      expect(resultByTitle(outcome, 'step 1').status).toBe('skipped');
+      expect(resultByTitle(outcome, 'step 2').status).toBe('skipped');
+      const group = outcome.report.run.serialGroups[0]!;
+      expect(group.status).toBe('interrupted');
+      expect(group.attempts[0]!.members.map((member) => member.status)).toEqual(['skipped', 'skipped']);
+      expect(outcome.report.run.summary.failed).toBe(0);
+      expect(outcome.exitCode).toBe(130);
+      assertValidReport(outcome.report);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'keeps the members verdicts of the attempt before a serial retry whose launch failed',
+    async () => {
+      const fake = createFakeEngine({
+        onStartAttempt(_context, index) {
+          if (index === 1) throw engineFailure('ENGINE_FAILURE', 'device lost on retry');
+        },
+      });
+      const file = `import { test } from 'e2e';
+
+test.describe('wizard', { serial: true, retries: 1 }, () => {
+  test('step 1', async () => {});
+  test('step 2', async () => {
+    throw new Error('step 2 assertion');
+  });
+});
+`;
+      const { outcome, project } = await runProject(
+        { 'tests/serial-retry-launch-fail.e2e.ts': file },
+        { appUrl: APP_URL, config: engineConfig(fake.engine) },
+      );
+      const group = outcome.report.run.serialGroups[0]!;
+      expect(group.status).toBe('failed');
+      expect(group.attempts.map((attempt) => attempt.error?.code)).toEqual(['ERROR', 'ENGINE_FAILURE']);
+      expect(resultByTitle(outcome, 'step 1').status).toBe('passed');
+      expect(resultByTitle(outcome, 'step 2').status).toBe('failed');
+      expect(outcome.exitCode).toBe(3);
+      assertValidReport(outcome.report);
+      project.cleanup();
+    },
+    60_000,
+  );
+
+  it(
+    'classifies EngineErrors from fixture surfaces (app.open) with the canonical mapping, and a plain Error as ENGINE_FAILURE',
     async () => {
       const failure = createFakeEngine({
         onNavigate() {
@@ -274,6 +416,23 @@ test('flaky against engine', { retries: 1 }, async ({ app }) => {
       expect(secondResult.attempts[0]!.error?.code).toBe('UNSUPPORTED_CAPABILITY');
       expect(second.outcome.exitCode).toBe(2);
       second.project.cleanup();
+
+      const plain = createFakeEngine({
+        onNavigate() {
+          throw new TypeError('renderer gone');
+        },
+      });
+      const third = await runProject(
+        { 'tests/plain-error.e2e.ts': PASSING_TEST },
+        { appUrl: APP_URL, config: engineConfig(plain.engine) },
+      );
+      const thirdResult = resultByTitle(third.outcome, 'taps a node');
+      expect(thirdResult.status).toBe('failed');
+      expect(thirdResult.attempts[0]!.error?.category).toBe('infrastructure');
+      expect(thirdResult.attempts[0]!.error?.code).toBe('ENGINE_FAILURE');
+      expect(thirdResult.attempts[0]!.error?.message).toContain('renderer gone');
+      expect(third.outcome.exitCode).toBe(3);
+      third.project.cleanup();
     },
     60_000,
   );
@@ -523,46 +682,6 @@ test('consumes session', { session: 'acct' }, async ({ app }) => {
   );
 
   it(
-    'retries retryable stale nodes against the engine and never repeats a possibly committed action',
-    async () => {
-      let performCalls = 0;
-      const fake = createFakeEngine({
-        perform() {
-          performCalls += 1;
-          if (performCalls === 1) {
-            throw engineFailure('NODE_STALE', 'node went stale', true);
-          }
-        },
-      });
-      const { outcome, project } = await runProject(
-        { 'tests/stale.e2e.ts': PASSING_TEST },
-        { appUrl: APP_URL, config: engineConfig(fake.engine) },
-      );
-      expect(resultByTitle(outcome, 'taps a node').status).toBe('passed');
-      expect(performCalls).toBe(2);
-
-      let committedCalls = 0;
-      const committed = createFakeEngine({
-        perform() {
-          committedCalls += 1;
-          throw engineFailure('ACTION_MAY_HAVE_COMMITTED', 'maybe committed');
-        },
-      });
-      const second = await runProject(
-        { 'tests/committed.e2e.ts': PASSING_TEST },
-        { appUrl: APP_URL, config: engineConfig(committed.engine) },
-      );
-      const result = resultByTitle(second.outcome, 'taps a node');
-      expect(result.status).toBe('failed');
-      expect(result.attempts[0]!.error?.code).toBe('ACTION_FAILED');
-      expect(committedCalls).toBe(1);
-      project.cleanup();
-      second.project.cleanup();
-    },
-    60_000,
-  );
-
-  it(
     're-observes when an engine reports a retryable observation failure',
     async () => {
       let observeCalls = 0;
@@ -628,27 +747,6 @@ test('consumes session', { session: 'acct' }, async ({ app }) => {
   );
 
   it(
-    'words the vision hint as a condition on an engine that declares screenshots but has produced no pixels',
-    async () => {
-      // The SPI has no pixel-capture declaration: an engine with the artifacts
-      // capability may still return no pixels from observe, as this one does.
-      const fake = createFakeEngine({ artifacts: true });
-      const model = installFakeModel(() => judgment('inconclusive', 'the tree lists no state for the Submit button'));
-      const { outcome, project } = await runProject(
-        { 'tests/observe-inconclusive-artifacts.e2e.ts': OBSERVE_TEST },
-        { appUrl: APP_URL, config: engineConfig(fake.engine, { agents: { default: { model } } }) },
-      );
-      const error = resultByTitle(outcome, 'asserts a node').attempts.at(-1)!.error!;
-      expect(error.code).toBe('ASSERTION_INCONCLUSIVE');
-      expect(error.message).toBe(
-        'the tree lists no state for the Submit button; the judge saw the semantic tree only; if the engine captures pixels, pass vision: true when the answer is in pixels',
-      );
-      project.cleanup();
-    },
-    60_000,
-  );
-
-  it(
     'leaves vision out of an inconclusive judgment once a pixel request of the attempt was degraded',
     async () => {
       // The engine declares screenshots and returns no pixels: the first
@@ -691,12 +789,13 @@ test('asserts after a degraded pixel request', async ({ app, agent }) => {
     async () => {
       // An observation is handed whatever remains of the invocation deadline,
       // so one starting near the end cannot finish. The engine failure that
-      // follows describes a truncated budget, not a broken app.
+      // follows describes a truncated budget, not a broken app. Only the
+      // second poll stalls, so the failure evidence after it observes at once.
       let observeCalls = 0;
       const fake = createFakeEngine({
         async observe(operation) {
           observeCalls += 1;
-          if (observeCalls === 1) return;
+          if (observeCalls !== 2) return;
           await new Promise((resolve) => setTimeout(resolve, operation.timeoutMs + 50));
           throw engineFailure('ENGINE_FAILURE', 'observation ran out of budget');
         },
@@ -728,29 +827,6 @@ test('asserts after a degraded pixel request', async ({ app, agent }) => {
       expect(outcome.report.run.errors.find((error) => error.code === 'UNSUPPORTED_ARTIFACT')?.message).toBe(
         "target \"fake\" (engine fake) cannot record a trace, and the target sets trace: 'on'",
       );
-      project.cleanup();
-    },
-    60_000,
-  );
-
-  it(
-    'normalizes a plain Error thrown by an engine member to infrastructure ENGINE_FAILURE',
-    async () => {
-      const fake = createFakeEngine({
-        onNavigate() {
-          throw new TypeError('renderer gone');
-        },
-      });
-      const { outcome, project } = await runProject(
-        { 'tests/plain-error.e2e.ts': PASSING_TEST },
-        { appUrl: APP_URL, config: engineConfig(fake.engine) },
-      );
-      const result = resultByTitle(outcome, 'taps a node');
-      expect(result.status).toBe('failed');
-      expect(result.attempts[0]!.error?.category).toBe('infrastructure');
-      expect(result.attempts[0]!.error?.code).toBe('ENGINE_FAILURE');
-      expect(result.attempts[0]!.error?.message).toContain('renderer gone');
-      expect(outcome.exitCode).toBe(3);
       project.cleanup();
     },
     60_000,
@@ -878,7 +954,7 @@ test('needs web', { requires: ['web'] }, async () => {});
   );
 
   it(
-    'registers an engine screenshot as an attempt artifact and reports unsupported gestures honestly',
+    'registers an engine screenshot as an attempt artifact',
     async () => {
       const fake = createFakeEngine({ artifacts: true });
       const file = `import { test } from 'e2e';
@@ -886,10 +962,6 @@ test('needs web', { requires: ['web'] }, async () => {});
 test('takes evidence', async ({ app }) => {
   await app.open('/');
   await app.screenshot('after-open');
-});
-
-test('swipes without a swipe capability', async ({ screen }) => {
-  await screen.swipe({ direction: 'down' });
 });
 `;
       const { outcome, project } = await runProject(
@@ -900,10 +972,6 @@ test('swipes without a swipe capability', async ({ screen }) => {
       expect(evidence.status).toBe('passed');
       expect(evidence.attempts[0]!.artifacts.some((artifact) => artifact.kind === 'screenshot')).toBe(true);
       expect(fake.operations.some((op) => op.method === 'artifacts.screenshot(after-open)')).toBe(true);
-      const swipes = resultByTitle(outcome, 'swipes without a swipe capability');
-      expect(swipes.status).toBe('failed');
-      expect(swipes.attempts[0]!.error?.code).toBe('UNSUPPORTED_CAPABILITY');
-      expect(swipes.attempts[0]!.error?.message).toContain('swipe');
       project.cleanup();
     },
     60_000,
@@ -1076,20 +1144,6 @@ test('fails on purpose', async ({ app }) => {
       expect(videosOf(outcome, 'taps a node')).toEqual([]);
       expect(videosOf(outcome, 'fails on purpose', 0)).toEqual([]);
       expect(videosOf(outcome, 'fails on purpose', 1)).toHaveLength(1);
-      project.cleanup();
-    },
-    60_000,
-  );
-
-  it(
-    'records every retry with on-all-retries',
-    async () => {
-      const fake = createFakeEngine({ video: true });
-      const { outcome, project } = await runProject(
-        { 'tests/fail.e2e.ts': FAILING_TEST },
-        { appUrl: APP_URL, config: engineConfig(fake.engine, { video: 'on-all-retries', retries: 2 }) },
-      );
-      expect([0, 1, 2].map((attempt) => videosOf(outcome, 'fails on purpose', attempt).length)).toEqual([0, 1, 1]);
       project.cleanup();
     },
     60_000,

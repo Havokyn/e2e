@@ -67,6 +67,7 @@ describe('traceCacheKeyHash', () => {
     target,
     signature: traceCallSignature('act', 'open billing', undefined),
     callIndex: 0,
+    agent: { name: 'default', context: 'The billing period is Monthly.' },
     policyVersion: 'replay-policy/0',
   };
 
@@ -89,8 +90,31 @@ describe('traceCacheKeyHash', () => {
     ['driver minor', { target: { ...target, engineVersion: '1.62.0' } }],
     ['driver SPI version', { target: { ...target, spiVersion: 2 } }],
     ['policy version', { policyVersion: 'replay-policy/1' }],
+    ['agent', { agent: { ...parts.agent, name: 'admin' } }],
+    ['agent context', { agent: { ...parts.agent, context: 'The billing period is Daily.' } }],
+    ['agent context, to none', { agent: { name: 'default', context: undefined } }],
   ])('changes when the %s changes', (_label, override) => {
     const hash = traceCacheKeyHash(buildTraceCacheKey(parts));
     expect(traceCacheKeyHash(buildTraceCacheKey({ ...parts, ...override }))).not.toBe(hash);
+  });
+
+  // Every committed .e2e/cache entry is filed under this hash, so a change here misses all of them after an upgrade.
+  // Change it only together with TRACE_SCHEMA_VERSION or the replay policy version.
+  it('hashes a fixed key to the same value across releases', () => {
+    expect(traceCacheKeyHash(buildTraceCacheKey(parts))).toBe('3170638ba32d00d06de1b48eccd2a8fb8268576fa96a4056b84c0911030611f5');
+    const withParams = {
+      ...parts,
+      signature: traceCallSignature('act', 'upgrade to {{plan}}', { plan: 'Pro', seats: 3 }),
+      callIndex: 2,
+      agent: { name: 'buyer', context: undefined },
+    };
+    expect(traceCacheKeyHash(buildTraceCacheKey(withParams))).toBe('6f7f3c0dd423476ec754b8930b845f38244e81656bc1ef159fb0470fb2a81e79');
+  });
+
+  it('keys the agent context by digest, never by its text', () => {
+    const key = buildTraceCacheKey({ ...parts, agent: { name: 'buyer', context: 'Pay with <secret:card>.' } });
+    expect(key.agent).toBe('buyer');
+    expect(key.agentContextDigest).toMatch(/^[a-f0-9]{64}$/);
+    expect(JSON.stringify(key)).not.toContain('Pay with');
   });
 });

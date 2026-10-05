@@ -11,8 +11,11 @@ import { createFixtures } from '../../src/run/fixtures.ts';
 import { StepRecorder } from '../../src/run/steps.ts';
 import { WorkerModels } from '../../src/run/worker-models.ts';
 import type { E2EConfig } from '../../src/types.ts';
+import { runAgentStepsOnFakeTime } from '../helpers/agent-fake-time.ts';
 import { installFakeLoopModel, loopCalls, type LoopResponder } from '../helpers/fake-loop-model.ts';
 import { snapshot } from '../helpers/snapshot.ts';
+
+runAgentStepsOnFakeTime();
 
 /** A real fixture graph with an in-memory engine and no runner process or model provider. */
 function runtime(overrides: Partial<E2EConfig> = {}) {
@@ -224,6 +227,50 @@ describe('tool loop downgraded tool choice', () => {
     await fixtures.agent.act('second');
 
     expect(loopCalls.map((call) => call.toolChoice)).toEqual(['required', 'required']);
+  });
+});
+
+describe('tool loop conclusion', () => {
+  it('ends the step on the first verdict of a turn that sends two', async () => {
+    const model = installFakeLoopModel(() => [
+      { toolName: 'complete_step', input: { status: 'failed', summary: 'the total is wrong', errorCode: 'ASSERTION_FAILED' } },
+      conclude,
+    ]);
+    const { fixtures, steps } = runtime({ agents: { default: { model } } });
+
+    await expect(fixtures.agent.act('check the total')).rejects.toMatchObject({ code: 'ASSERTION_FAILED' });
+
+    expect(loopCalls).toHaveLength(1);
+    expect(steps.all()[0]!.status).toBe('failed');
+  });
+});
+
+describe('tool loop forced conclusion answered with another tool', () => {
+  it('sends the call back as an error and asks again on the same turn budget', async () => {
+    const signed = { google: { thoughtSignature: 'sig-2' } };
+    const model = installFakeLoopModel(({ turn }) =>
+      turn === 3 ? [conclude] : [{ toolName: 'peek', input: {}, ...(turn === 2 ? { providerMetadata: signed } : {}) }],
+    );
+    const { fixtures, steps } = runtime({ agents: { default: { tools: { peek }, model, maxModelCalls: 3 } } });
+
+    await fixtures.agent.act('look until told to stop');
+
+    expect(loopCalls.map((call) => call.toolChoice)).toEqual(['required', 'tool:complete_step', 'tool:complete_step']);
+    expect(loopCalls[2]!.toolResults).toEqual(['looked', expect.stringContaining('peek did not run')]);
+    // The refused call goes back with its provider metadata, as the SDK's own history keeps it.
+    expect(loopCalls[2]!.toolCallOptions).toEqual([undefined, signed]);
+    const step = steps.all()[0]!;
+    expect(step.status).toBe('passed');
+    // The wrong-tool reply was answered and billed before the SDK threw on it.
+    expect(step.metrics?.modelCalls).toBe(3);
+  });
+
+  it('fails with STEP_NO_CONCLUSION when the model never calls complete_step', async () => {
+    const model = installFakeLoopModel(() => [{ toolName: 'peek', input: {} }]);
+    const { fixtures } = runtime({ agents: { default: { tools: { peek }, model, maxModelCalls: 3 } } });
+
+    await expect(fixtures.agent.act('look forever')).rejects.toMatchObject({ code: 'STEP_NO_CONCLUSION' });
+    expect(loopCalls).toHaveLength(3);
   });
 });
 

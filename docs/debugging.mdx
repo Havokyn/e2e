@@ -1,6 +1,7 @@
 ---
 title: Debugging a run
 description: Read the report, open the evidence, watch the browser, and see what the model was sent.
+icon: "magnifying-glass"
 ---
 
 Start with the failure in the terminal. Every run also writes
@@ -63,7 +64,9 @@ URL: `http://127.0.0.1:3000/todos`
 
 `Look at` points to the failing call. Assertion failures include expected
 and observed values; locator failures include the requested locator and
-nearby matches. Repeated failure details help you compare attempts.
+nearby matches. Repeated failure details help you compare attempts. The
+runner spends at most 5 s capturing the screen and screenshot once per failed
+attempt; an app that does not answer in time gets no screen section.
 
 ## The report
 
@@ -91,7 +94,9 @@ failed result:
 
 Artifacts land under `.e2e/artifacts/` (`<output>/artifacts/` when the
 [`output`](/reference/config#output) is moved), one directory per attempt.
-Each run empties it first, so it holds the latest run's evidence:
+Each run empties it first, so it holds the latest run's evidence. A
+`--last-failed` rerun instead empties it down to the files the report it
+reruns names, and writes its own under `rerun-<n>/`:
 
 - **Screenshots.** Failed attempts capture one whenever the engine can and
   pixels are allowed. The built-in `agent.assert` also captures one after
@@ -99,12 +104,13 @@ Each run empties it first, so it holds the latest run's evidence:
   be withheld. Use `app.screenshot('label')` to capture one explicitly.
 - **Playwright traces** on the attempts the [`trace`](/reference/config#trace)
   mode records: every attempt locally, the first retry in CI. Open one with
-  `npx playwright show-trace <file>`; `--trace off` skips the cost for one
-  run, `--trace` records every attempt of a CI run.
+  `npx playwright-core@1.63.0 show-trace <file>` (`pnpm dlx` under pnpm);
+  `--trace off` skips the cost for one run, `--trace` records every attempt
+  of a CI run.
 - **Downloads** saved through `browser.waitForDownload`, recorded with kind
-  `download`. They are the app's bytes: `redaction: "incomplete"` unless a
-  secret reached the session (filled, or held by the engine for basic auth)
-  and the file is text, which the runner rewrites and marks `complete`.
+  `download`. They are the app's bytes: `redaction: "incomplete"` unless the
+  session knows a secret value and the file is text, which the runner rewrites and
+  marks `complete`.
 - **Videos** and **agent transcripts** when you ask for them; see below.
 
 After a secret fill, no screenshots are taken for the rest of the attempt; see
@@ -193,9 +199,16 @@ stdout | web tests/todos.e2e.ts > adds a todo
 hello from the test
 ```
 
-Nothing is buffered or dropped: every line appears when it is written, in a
-pipe or a CI log as much as in a terminal. The output is not part of the
-report; use `expect` or an artifact for anything a later reader needs.
+Output from outside a test, such as a test file's top level or a reporter,
+prints under `stdout | runner` or `stderr | runner`. Both streams print on
+stdout, in a pipe or a CI log too. Without the `list` reporter, output
+goes to its own stream as written.
+
+Secret values are [redacted](/security#redaction). Output printed while the
+config loads appears once it has loaded, before the run header, and is
+dropped for a warning if the load fails. Every other line appears when it
+is written. The output is not part of the report; use `expect` or an
+artifact for anything a later reader needs.
 
 ## Agent steps
 
@@ -261,13 +274,13 @@ large raw JSON file.
 
 Replayed steps make no model call and leave no AI trace. Add `--no-cache`
 when you need to inspect the whole flow or rule out a stale recording. See
-[Caching agent steps](/cache).
+[Caching](/cache).
 
 ## Common errors
 
 | Code | Usual cause | Fix |
 | --- | --- | --- |
-| `APP_UNREACHABLE` | Nothing answers at `app.url`, or `app.command` never became ready; on a device, the message may name the iOS automation runner instead (busy, wedged, or a snapshot it could not present) | Set `app.command.log` and read it; check the port; raise `app.command.startupTimeout`. For the runner, follow the recovery in the message: `npx agent-device daemon stop`, reboot the simulator (see [Testing iOS and Android](/mobile#troubleshooting)) |
+| `APP_UNREACHABLE` | Nothing answers at `app.url`, or `app.command` never became ready; on a device, the message may name the iOS automation runner instead (busy, wedged, or a snapshot it could not present) | Set `app.command.log` and read it; check the port; raise `app.command.startupTimeout`. For the runner, follow the recovery in the message: `npx agent-device daemon stop`, reboot the simulator (see [Mobile](/mobile#troubleshooting)) |
 | `APP_ALREADY_RUNNING` | Something already serves `app.url` when the runner wanted to start `app.command` | Stop it, or set `reuseExisting: true` for local runs |
 | `LOCATOR_NOT_FOUND` | Wrong role or name, text not exact, element inside an iframe, page not open | Read the markup for the accessible name; try `exact: false`; `browser.frameLocator` for iframes; `--headed` to look |
 | `LOCATOR_AMBIGUOUS` | Two matches: a hidden duplicate, a repeated label | Add `{ name }`, scope under a container, `filter`, `first()`, or `{ visible: true }` |

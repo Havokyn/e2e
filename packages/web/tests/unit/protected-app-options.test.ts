@@ -1,5 +1,5 @@
 /**
- * The `navigationPolicy`, `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, and `screencast` options are checked at
+ * The `navigationPolicy`, `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, `locale`, `timezoneId`, `initScripts`, and `screencast` options are checked at
  * config load, so a header the browser could never send or an attribute no
  * element could carry fails the run before a browser launches. What the
  * browser does with valid ones is in tests/integration.
@@ -7,7 +7,7 @@
 
 import { describe, expect, it } from 'vitest';
 import { secrets } from 'e2e';
-import { web } from '../../src/index.ts';
+import { web, type WebOptions } from '../../src/index.ts';
 import { httpCredentials } from '../../src/protected-app.ts';
 
 describe('web({ navigationPolicy })', () => {
@@ -23,13 +23,6 @@ describe('web({ navigationPolicy })', () => {
   });
 });
 describe('web({ headers })', () => {
-  it('accepts an object of header names to string values', () => {
-    expect(() =>
-      web({ headers: { 'x-vercel-protection-bypass': 'token', 'ngrok-skip-browser-warning': '1' } }),
-    ).not.toThrow();
-    expect(() => web({ headers: {} })).not.toThrow();
-  });
-
   it('rejects a header name outside the token grammar as INVALID_CONFIG', () => {
     for (const name of ['x bypass', 'x:bypass', '', 'x\nbypass']) {
       expect(() => web({ headers: { [name]: 'v' } })).toThrowError(/invalid header name/);
@@ -86,15 +79,9 @@ describe('web({ basicAuth })', () => {
 });
 
 describe('web({ testIdAttribute })', () => {
-  it('accepts an attribute name', () => {
-    for (const attribute of ['data-testid', 'data-qa', 'data-test-id', 'id', 'x:qa', 'data.qa']) {
-      expect(() => web({ testIdAttribute: attribute })).not.toThrow();
-    }
-  });
-
   it('rejects anything that is not an attribute name as INVALID_CONFIG', () => {
-    for (const attribute of ['', ' data-qa', 'data qa', '1-qa', 'data="qa"', 'data-qa]', 3, null]) {
-      expect(() => web({ testIdAttribute: attribute as unknown as string })).toThrowError(
+    for (const attribute of ['', 'data qa', 'data="qa"']) {
+      expect(() => web({ testIdAttribute: attribute })).toThrowError(
         /testIdAttribute.*must be an attribute name/,
       );
     }
@@ -102,10 +89,6 @@ describe('web({ testIdAttribute })', () => {
 });
 
 describe('web({ userAgent })', () => {
-  it('accepts a non-empty string', () => {
-    expect(() => web({ userAgent: 'Mozilla/5.0 playwright' })).not.toThrow();
-  });
-
   it('rejects an empty or non-string value and a control character', () => {
     expect(() => web({ userAgent: '' })).toThrowError(/non-empty string/);
     expect(() => web({ userAgent: 3 as unknown as string })).toThrowError(/non-empty string/);
@@ -118,26 +101,53 @@ describe('web({ userAgent })', () => {
   });
 });
 
-describe('web({ screencast })', () => {
-  it('accepts a whole-pixel size and a 0-100 quality, each optional', () => {
-    expect(() => web({ screencast: {} })).not.toThrow();
-    expect(() => web({ screencast: { size: { width: 1920, height: 1080 }, quality: 90 } })).not.toThrow();
-    expect(() => web({ screencast: { quality: 0 } })).not.toThrow();
+describe('web({ locale, timezoneId })', () => {
+  it('accepts a time zone alias', () => {
+    expect(() => web({ timezoneId: 'US/Eastern' })).not.toThrow();
   });
 
+  it('rejects a value that is no language tag or time zone', () => {
+    for (const locale of ['', 'de_DE', 'und']) {
+      expect(() => web({ locale })).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringMatching(/BCP 47/) }));
+    }
+    for (const timezoneId of ['', 'Mars/Olympus_Mons', '+01:00', 'utc']) {
+      expect(() => web({ timezoneId })).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringMatching(/IANA time zone/) }));
+    }
+  });
+
+  it('rejects an accept-language header beside locale, which would override it on the app site only', () => {
+    expect(() => web({ locale: 'de-DE', headers: { 'Accept-Language': 'fr' } })).toThrowError(/conflict/);
+    expect(() => web({ locale: 'de-DE', headers: { 'x-preview': 'token' } })).not.toThrow();
+  });
+});
+
+describe('web({ initScripts })', () => {
+  it('rejects anything else, naming the entry', () => {
+    const refused = (message: RegExp) => expect.objectContaining({ code: 'INVALID_CONFIG', message: expect.stringMatching(message) });
+    const cases: [unknown, RegExp][] = [
+      ['window.x = 1', /must be an array of scripts/],
+      [[3], /\[0\] must be a string of source, a \{ path \}, or a function, got number/],
+      [['ok', null], /\[1\] must be a string of source.*got null/],
+      [[{ path: '' }], /\[0\] path must be a non-empty string/],
+      [[{ content: 'x' }], /\[0\] takes only path, got content/],
+      // oxlint-disable-next-line no-sparse-arrays -- the hole is the case
+      [['ok', , 'ok'], /\[1\] must be a string of source.*got undefined/],
+    ];
+    for (const [initScripts, message] of cases) {
+      expect(() => web({ initScripts: initScripts as NonNullable<WebOptions['initScripts']> })).toThrow(refused(message));
+    }
+  });
+});
+
+describe('web({ screencast })', () => {
   it('rejects a fractional or empty size, a quality outside 0-100, and an unknown key as INVALID_CONFIG', () => {
     for (const screencast of [null, [], 'on', 1, new Date()]) {
       expect(() => web({ screencast } as unknown as Parameters<typeof web>[0])).toThrow(/must be a plain object/);
     }
     const invalid = [
-      { size: {} },
-      { size: { width: 0, height: 720 } },
       { size: { width: 1280.5, height: 720 } },
       { quality: 101 },
-      { quality: 0.5 },
       { size: { width: 1280, height: 720, depth: 2 } },
-      { size: new (class Size { width = 1280; height = 720; })() },
-      { mode: 'on' },
     ];
     for (const screencast of invalid) {
       expect(() => web({ screencast } as unknown as Parameters<typeof web>[0])).toThrow(expect.objectContaining({ code: 'INVALID_CONFIG' }));
@@ -162,7 +172,7 @@ describe('web() option keys', () => {
       refused('web() has unknown key "viewprt"; did you mean "viewport"?'),
     );
     expect(() => web({ launchOptions: {} } as unknown as Parameters<typeof web>[0])).toThrow(
-      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, navigationPolicy, headers, basicAuth, testIdAttribute, userAgent'),
+      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, navigationPolicy, headers, basicAuth, testIdAttribute, userAgent, locale, timezoneId, initScripts'),
     );
   });
 

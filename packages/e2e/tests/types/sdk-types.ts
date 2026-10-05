@@ -56,6 +56,7 @@ import type { LanguageModelV2, LanguageModelV3, LanguageModelV4 } from '@ai-sdk/
 import { chatgpt } from '../../src/oauth/chatgpt.ts';
 import { copilot } from '../../src/oauth/copilot.ts';
 import { grok } from '../../src/oauth/grok.ts';
+import { opencodeConsole } from '../../src/oauth/opencode-console.ts';
 // @ts-expect-error isDefinedTool left e2e/agent: config loading checks each tools entry itself
 import { isDefinedTool } from '../../src/agent/public.ts';
 // @ts-expect-error createAgent left e2e/agent: an agents entry is the plain object it took
@@ -366,6 +367,7 @@ void (executorContext.actions.hitTest(point) satisfies Promise<PointHit>);
 void screen.tapAt(point, { timeout: 1_000 });
 void screen.swipe({ direction: 'up', momentum: 'fast' });
 void screen.swipe({ from: point, to: point });
+void screen.swipe({ from: point, to: point, duration: 300 });
 void screen.getByRole('image').tap({ position: point, timeout: 1_000 });
 const rangeKeys: readonly KeyModifier[] = ['Shift', 'ControlOrMeta'];
 void screen.getByRole('row').click({ modifiers: rangeKeys });
@@ -381,6 +383,8 @@ void screen.swipe({ from: point });
 void screen.swipe({ direction: 'up', to: point });
 // @ts-expect-error a locator swipe is directional; the path form is screen.swipe.
 void screen.getByRole('image').swipe({ from: point, to: point });
+// @ts-expect-error a directional swipe takes no duration.
+void screen.swipe({ direction: 'up', duration: 300 });
 // @ts-expect-error a surface without a url has no base URL; a test must handle undefined
 const appOrigin: string = appFixture.baseUrl;
 void appOrigin;
@@ -504,6 +508,10 @@ report.run.results[0]!.repeat satisfies number;
 // Interrupted tests are counted on their own, never in failed.
 report.run.summary.interrupted satisfies number;
 report.run.explore satisfies { goal: string; findings: readonly { severity: 1 | 2 | 3 | 4 | 5; artifactId?: string | undefined }[] } | undefined;
+// A --last-failed rerun carries what it owed and left out as full results, groups, and hook errors, never a looser shape.
+report.run.carried satisfies
+  | { results: Report['run']['results']; serialGroups: Report['run']['serialGroups']; errors: Report['run']['errors'] }
+  | undefined;
 
 // An explore run's events narrow to the exploration's progress.
 if (runEvent.type === 'explore') {
@@ -515,12 +523,15 @@ if (runEvent.type === 'explore') {
 chatgpt('gpt-5.6-luna') satisfies LanguageModelV4;
 copilot('gpt-4.1') satisfies LanguageModelV4;
 grok('grok-4') satisfies LanguageModelV4;
+opencodeConsole('go/deepseek-v4.1-flash') satisfies LanguageModelV4;
 // @ts-expect-error the store and apiUrl options are gone
 chatgpt('gpt-5.6-luna', {});
 // @ts-expect-error the store and baseURL options are gone
 copilot('gpt-4.1', {});
 // @ts-expect-error the store and baseURL options are gone
 grok('grok-4', {});
+// @ts-expect-error a constructor takes the model id alone
+opencodeConsole('go/deepseek-v4.1-flash', {});
 
 // agents.<name>: the judge slot beside model, and every budget in one entry.
 ({ targets: [{ engine }], agents: { default: { model, judge: model, judgmentTimeout: 30_000, maxSteps: 5, maxModelCalls: 10, maxObservationBytes: 1000, maxInputTokens: 32_000 } } }) satisfies E2EConfig;

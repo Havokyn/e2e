@@ -1,15 +1,17 @@
 ---
 title: Browser
 description: The browser engine, its options, and the browser fixture it contributes.
+icon: "globe"
 ---
 
 `@e2e-dev/web` drives Chromium, Firefox, and WebKit through Playwright.
 A web target names it as its engine, and it contributes the `browser` fixture for
 browser-only work. Import `test` from the package to have `browser` typed.
 
-The package declares `playwright` as a peer dependency (`>=1.63.0 <2`) and
-does not install it. An app that already depends on Playwright keeps its
-version; `e2e init` adds `playwright` only to a project that has none.
+The package depends on `playwright-core` pinned to an exact version, so the
+engine always runs the Playwright it was tested against. An app that depends
+on Playwright itself keeps its own copy; the two share a browser cache only
+when their versions match.
 
 ```ts title="e2e.config.ts"
 import type { E2EConfig } from 'e2e';
@@ -19,6 +21,31 @@ export default {
   targets: [{ engine: web(), app: { url: 'http://localhost:3000' } }],
 } satisfies E2EConfig;
 ```
+
+## Installing browsers
+
+A missing browser downloads once per run, before the run's clock starts. To
+install browsers as their own step, in CI or a container image, run the
+package's command. It installs the browsers for the Playwright version the
+engine pins:
+
+<CodeGroup>
+```bash npm
+npx @e2e-dev/web install chromium --with-deps
+```
+
+```bash pnpm
+pnpm exec e2e-web install chromium --with-deps
+```
+
+```bash bun
+bunx @e2e-dev/web install chromium --with-deps
+```
+</CodeGroup>
+
+Name any of `chromium`, `firefox`, and `webkit`; with none named it installs
+`chromium`. `--with-deps` also installs the system libraries the browsers need
+on Linux. The command exits with the installer's exit code.
 
 ## Options
 
@@ -94,7 +121,26 @@ export interface WebOptions {
    * (`connect.reconnectEndpoint`, or a provider with `scope: 'attempt'`).
    */
   readonly userAgent?: string;
+  /**
+   * The locale every attempt's context runs in, a BCP 47 tag such as
+   * `de-DE`: what `navigator.language`, `Intl` formatting, and the
+   * `Accept-Language` header report. Defaults to the browser's own. An
+   * `accept-language` entry in `headers` beside it is `INVALID_CONFIG`, and
+   * so is a persistent context.
+   */
+  readonly locale?: string;
+  /**
+   * The IANA time zone every attempt's context runs in, such as
+   * `Europe/Berlin`: what `Date` and `Intl` resolve local time against.
+   * Defaults to the machine's. A persistent context is `INVALID_CONFIG`.
+   */
+  readonly timezoneId?: string;
+  /** Scripts every document runs before the page's own. See [Init scripts](#init-scripts). */
+  readonly initScripts?: readonly WebInitScript[];
 }
+
+/** JavaScript source, a file relative to the project root, or a function. */
+export type WebInitScript = string | { readonly path: string } | (() => unknown);
 
 /** The engine's screencast of the page: the frame size and the JPEG quality of the frames it encodes. */
 export interface WebScreencastOptions {
@@ -129,7 +175,7 @@ That protection is text only: unlike a fill, it withholds no screenshot or
 model pixels, so a page that renders the password on screen is not masked in
 them ([Security](/security#secrets)).
 
-`headers` and `basicAuth` are how a test reaches a [protected preview](/starting-your-app#protected-previews).
+`headers` and `basicAuth` are how a test reaches a [protected preview](/web#protected-previews).
 
 `screencast` shapes the recording, not which attempts record: that is the
 config's [`video`](/reference/config#video) mode. `size` takes whole pixels,
@@ -192,7 +238,7 @@ recording resume, but a segment lost during the disconnect cannot be recovered.
 Code using `surfaceOf(engine)` must read its accessors again after recovery;
 previously retained Playwright objects belong to the disconnected transport.
 
-Persistent recovery does not support `headers`, `basicAuth`, `userAgent`, `app.clearState`,
+Persistent recovery does not support `headers`, `basicAuth`, `userAgent`, `locale`, `timezoneId`, `app.clearState`,
 or session state capture and restore. `app.restart` remains available. Omit
 `reconnectEndpoint` to keep ordinary isolated contexts and the existing behavior.
 A `browser` provider with `scope: 'attempt'` rides the same persistent
@@ -214,7 +260,7 @@ a page acts on that tab: `goto`, `reload`, `back`, `forward`, `url`, `title`,
 `waitForURL`, `locator`, `frameLocator`, `evaluate`, `waitForResponse`,
 `waitForDownload`, `keyboard`, `mouse`, the `expect(browser)` matchers, and
 every `screen` query. What belongs to the browser covers every tab:
-`cookies`, `setCookies`, `route`, `unroute`, and `onDialog`. `setViewport`
+`cookies`, `setCookies`, `route`, `unroute`, `onDialog`, and `addInitScript`. `setViewport`
 sizes the active tab and every tab opened after it.
 
 A tab the app opens itself, from a `target="_blank"` link or `window.open`,
@@ -258,13 +304,17 @@ export interface Browser extends Expectable<BrowserExpectation> {
   locator(selector: string): Locator;
   /** Creates a screen query scope inside one iframe. */
   frameLocator(selector: string): FrameScreen;
-  /** Evaluates trusted test code in the page. */
+  /** Evaluates trusted test code in the page: a function, or a string expression whose value is returned, called first if it is a function. */
   evaluate<T extends JsonValue>(fn: string | (() => T | Promise<T>)): Promise<T>;
   /** Evaluates trusted test code with one required JSON-safe argument. */
   evaluate<T extends JsonValue, Arg extends JsonValue>(
     fn: string | ((arg: Arg) => T | Promise<T>),
     arg: Arg,
   ): Promise<T>;
+  /** Adds a script every document runs before the page's own, from the next navigation on. */
+  addInitScript(script: string | { path: string } | (() => unknown)): Promise<void>;
+  /** Adds an init script function called with one JSON argument. */
+  addInitScript<Arg extends JsonValue>(script: (arg: Arg) => unknown, arg: Arg): Promise<void>;
   /** Adds an attempt-scoped network route. */
   route(
     pattern: string | RegExp,
@@ -320,7 +370,7 @@ export interface Browser extends Expectable<BrowserExpectation> {
 | `goto`, `reload`, `back`, `forward` | `config.timeout`, 120000 ms, the same budget `app.open()` uses; `{ timeout }` overrides, capped by the test deadline |
 | `waitForResponse`, `waitForDownload` | `config.actionTimeout`, 30000 ms; `{ timeout }` overrides, capped by the test deadline |
 | `waitForURL` | `config.assertionTimeout`, 5000 ms |
-| `url`, `title`, `evaluate`, `route`, `unroute`, `cookies`, `setCookies`, `setViewport`, `onDialog`, `keyboard.*`, `mouse.*` | `config.actionTimeout`, 30000 ms, not overridable |
+| `url`, `title`, `evaluate`, `addInitScript`, `route`, `unroute`, `cookies`, `setCookies`, `setViewport`, `onDialog`, `keyboard.*`, `mouse.*` | `config.actionTimeout`, 30000 ms, not overridable |
 
 Every `browser` call is a recorded `browser.<method>` step, except `locator` and
 `frameLocator`: they build a locator without touching the page, and the
@@ -398,6 +448,10 @@ close over anything outside its own body; helpers declared inside the body
 work. Pass outside values through `arg`. Both `arg` and the return value
 must be `JsonValue`, otherwise the call fails with `INVALID_ARGUMENT`.
 
+A string is evaluated as a single expression, not as statements. If it
+evaluates to a function, that function is called with `arg`; otherwise its
+value is the result. A promise, from either, is awaited.
+
 An exception in the evaluated code is `EVALUATE_FAILED` with its message. A
 Playwright timeout is `ACTION_FAILED`; a closed page or lost context is
 `ENGINE_FAILURE`.
@@ -408,7 +462,25 @@ const flag = await browser.evaluate(
   (name: string) => window.localStorage.getItem(name),
   'featureFlags',
 );
+const title = await browser.evaluate<string>('document.title');
 ```
+
+### Init scripts
+
+An init script runs in every document before the page's own scripts, in every
+tab and frame. `web({ initScripts })` applies to every test;
+`browser.addInitScript` adds one for the rest of the test.
+
+A script is JavaScript source, a `{ path }` relative to the project root, or a
+function. A function cannot close over test variables; pass a JSON `arg`
+instead.
+
+```ts
+await browser.addInitScript((value) => { Math.random = () => value; }, 0.5);
+await app.open('/raffle');
+```
+
+A script added after the page opened runs from the next navigation or reload.
 
 ### Routing
 

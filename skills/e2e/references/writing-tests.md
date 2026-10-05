@@ -203,7 +203,7 @@ field and types one character per `delay`, plain string only (a `Secret` is
 Coordinates are CSS pixels, for what the tree does not list: `tap({ position:
 { x, y } })` offsets from the node's top-left corner (with `modifiers` it is
 `INVALID_ARGUMENT`), `screen.tapAt({ x, y })` taps a viewport point,
-`screen.swipe({ from, to })` swipes along a path,
+`screen.swipe({ from, to, duration? })` swipes along a path,
 `screen.swipe({ direction, momentum? })` swipes the viewport. Prefer a
 locator; a point moves with the layout.
 
@@ -371,6 +371,8 @@ the app opens itself (`target="_blank"`, `window.open`) is not followed:
 - `evaluate(fn | source, arg?)`: runs a function or source string in the
   page, JSON in and out, no closures; a throw in the page is
   `EVALUATE_FAILED`.
+- `addInitScript(source | { path } | fn)`, `addInitScript(fn, arg)`: runs
+  before the page's own scripts; call it before `app.open`. `arg` is JSON.
 - `route(pattern, handler)`, `unroute(pattern)`: intercept requests, newest
   route first; `route.request` has `url`, `method`, `headers`, `postData`.
   The handler calls exactly one of

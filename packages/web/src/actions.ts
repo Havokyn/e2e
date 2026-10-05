@@ -1,10 +1,11 @@
 /** Locator action dispatch for the Playwright engine. */
 
-import type { Page } from 'playwright';
+import type { ElementHandle, Page } from 'playwright-core';
 import { EngineError, type KeyModifier, type LocatorAction, type NodeRef, type PointerAction, type ViewportPoint } from 'e2e/engine';
 import {
   asActionable,
   isClassified,
+  isNavigationRace,
   isPwTimeout,
   message,
   nearestPixel,
@@ -13,6 +14,7 @@ import {
   performPointerDrag,
   performViewportSwipe,
   POST_DISPATCH_PATTERN,
+  translatePwError,
   type ActionTarget,
 } from './support.ts';
 
@@ -22,6 +24,57 @@ const DEFAULT_LONG_PRESS_MS = 500;
 /** The keys a click holds, as Playwright's `modifiers` takes them; the contract spells them the same. */
 function heldKeys(action: Extract<LocatorAction, { kind: 'tap' | 'doubleTap' | 'secondaryTap' }>): { modifiers?: KeyModifier[] } {
   return action.modifiers === undefined ? {} : { modifiers: [...action.modifiers] };
+}
+
+/** Playwright's words for an element handle whose element left the DOM. */
+const DETACHED_PATTERN = /element (is |was )?(detached|not attached)/i;
+
+/**
+ * Sets a checkbox, switch, or radio to `checked` with one click, as
+ * Playwright's `check` does, apart from the read after the click: a control
+ * that is gone by then (an app that swaps a picked radio for its selected
+ * view, or navigates on change) took the click, so the action is done, where
+ * Playwright reports it detached as if the click never happened. Whatever
+ * took its place is not read: the next observation or assertion shows it,
+ * as it does after a tap. The reads and the click share one element, so the state before and after the click
+ * is one control's.
+ */
+async function setChecked(target: ActionTarget, checked: boolean, timeout: number): Promise<void> {
+  const deadline = Date.now() + timeout;
+  // Playwright reads a timeout of 0 as no timeout at all.
+  const remaining = (): number => Math.max(1, deadline - Date.now());
+  const element = target.kind === 'element' ? target.element : await target.locator.elementHandle({ timeout });
+  const verb = checked ? 'check' : 'uncheck';
+  try {
+    if ((await element.isChecked()) === checked) return;
+    if (!checked && (await isRadio(element))) {
+      throw new EngineError('NOT_ACTIONABLE', 'uncheck cannot clear a radio button; select another radio in its group', {
+        retryable: false,
+      });
+    }
+    await element.click({ timeout: remaining() });
+    let after: boolean;
+    try {
+      after = await element.isChecked();
+    } catch (cause) {
+      if (DETACHED_PATTERN.test(message(cause)) || isNavigationRace(cause)) return;
+      throw cause;
+    }
+    if (after !== checked) {
+      throw new EngineError('NOT_ACTIONABLE', `${verb} clicked the control but its checked state did not change`, {
+        retryable: false,
+      });
+    }
+  } finally {
+    if (target.kind === 'locator') void element.dispose().catch(() => undefined);
+  }
+}
+
+/** Whether a checkable element is a radio, which a click can select but never clear. */
+function isRadio(element: ElementHandle<Element>): Promise<boolean> {
+  return element.evaluate(
+    (node) => (node instanceof HTMLInputElement && node.type === 'radio') || node.getAttribute('role') === 'radio',
+  );
 }
 
 /**
@@ -61,10 +114,8 @@ export async function dispatchLocatorAction(
       await locator.press(action.key, { timeout });
       return;
     case 'check':
-      await locator.check({ timeout });
-      return;
     case 'uncheck':
-      await locator.uncheck({ timeout });
+      await setChecked(target, action.kind === 'check', timeout);
       return;
     case 'focus':
       // ElementHandle.focus takes no timeout: the element is already resolved.
@@ -119,7 +170,12 @@ export async function dispatchLocatorAction(
  * behind it: no actionability wait, because there is no element to wait on,
  * and the page decides what the gesture lands on, as it does for a person.
  */
-export async function dispatchPointerAction(page: Page, at: ViewportPoint, action: PointerAction): Promise<void> {
+export async function dispatchPointerAction(
+  page: Page,
+  at: ViewportPoint,
+  action: PointerAction,
+  signal?: AbortSignal,
+): Promise<void> {
   const { mouse } = page;
   const point = nearestPixel(at);
   switch (action.kind) {
@@ -139,9 +195,11 @@ export async function dispatchPointerAction(page: Page, at: ViewportPoint, actio
       await mouse.move(point.x, point.y);
       return;
     case 'dragTo':
+      await performPointDrag(mouse, point, action.target, undefined, signal);
+      return;
     case 'swipeTo':
       // A swipe along a path is a pointer drag on a document platform.
-      await performPointDrag(mouse, point, action.target);
+      await performPointDrag(mouse, point, action.target, action.durationMs, signal);
       return;
     case 'swipe':
       // The pointer moves to the point first so the scrollable under it receives the wheel.
@@ -149,6 +207,24 @@ export async function dispatchPointerAction(page: Page, at: ViewportPoint, actio
       await performViewportSwipe(page, action.direction, action.momentum ?? 'none');
       return;
   }
+}
+
+/**
+ * An input operation the operation deadline cut off: Playwright never
+ * answered, so whether the input reached the page is unknown, and it must not
+ * be repeated blindly.
+ */
+function inputCutOff(cause: unknown, label: string): EngineError | undefined {
+  if (!(cause instanceof EngineError) || cause.code !== 'OPERATION_TIMEOUT') return undefined;
+  return new EngineError('ACTION_MAY_HAVE_COMMITTED', `${label} timed out before the page answered; its input may have been dispatched`, {
+    retryable: false,
+    cause,
+  });
+}
+
+/** Translates the failure of an input operation with no element behind it: a pointer action at a point, or a keystroke. */
+export function classifyInputError(cause: unknown, label: string): Error {
+  return inputCutOff(cause, label) ?? translatePwError(cause, label);
 }
 
 /**
@@ -188,16 +264,29 @@ function actionabilitySummary(text: string): string {
 /**
  * Classifies a failed action onto the error contract (see the table above
  * `POST_DISPATCH_PATTERN` in support.ts): stale, not actionable, possibly
- * committed, or an engine fault.
+ * committed, or an engine fault. A strict mode violation is a located match
+ * that turned ambiguous: stale like a detached one before any input, so the
+ * runner locates again and reports the ambiguity or acts on the one match
+ * left; possibly committed once input went out, as the second side of a drag
+ * resolves after the press.
  */
 export function classifyActionError(rawCause: unknown, action: LocatorAction): Error {
+  const cut = inputCutOff(rawCause, action.kind);
+  if (cut !== undefined) return cut;
   if (isClassified(rawCause)) return rawCause;
   const text = redactSensitive(message(rawCause), action);
   const cause = isSensitive(action) ? undefined : rawCause;
   if (/strict mode violation/i.test(text)) {
-    return new EngineError('ENGINE_FAILURE', text, { retryable: false, cause });
+    if (POST_DISPATCH_PATTERN.test(text)) {
+      return new EngineError(
+        'ACTION_MAY_HAVE_COMMITTED',
+        `${action.kind} matched more than one element after its input was dispatched: ${text}`,
+        { retryable: false, cause },
+      );
+    }
+    return new EngineError('NODE_STALE', text, { retryable: true, cause });
   }
-  if (/element (is |was )?(detached|not attached)/i.test(text)) {
+  if (DETACHED_PATTERN.test(text)) {
     return new EngineError('NODE_STALE', text, { retryable: true, cause });
   }
   if (/Timeout .*exceeded/i.test(text) || isPwTimeout(rawCause)) {

@@ -9,6 +9,7 @@ import { packageVersion } from '../internal/package-version.ts';
 import { classifyError, exitCodeForCategory } from '../internal/errors.ts';
 import type { Shard, TagMode } from '../collect/select.ts';
 import { list, run, type ListedPair, type RunOptions, type RunOutcome } from '../run/runner.ts';
+import { claimRunnerOutput } from './run-output.ts';
 import { explore, STEP_BOUNDS, TIMEOUT_BOUNDS } from '../explore/index.ts';
 import { BUILTIN_REPORTERS, isBuiltinReporter } from '../report/builtin.ts';
 import { bounded } from '../report/format.ts';
@@ -437,18 +438,18 @@ function createProgram(version: string, telemetry: Telemetry): Command {
 
   program
     .command('login')
-    .summary('sign in to a ChatGPT, GitHub Copilot, or SuperGrok subscription for agent steps')
+    .summary('sign in to a ChatGPT, GitHub Copilot, OpenCode Console, or SuperGrok subscription for agent steps')
     .description(
-      'Sign in once to a personal subscription and store the login for the e2e/oauth models: openai (ChatGPT Plus/Pro, the Codex sign-in), github-copilot (GitHub Copilot; reuses the GitHub CLI login or runs a device flow for your OAuth App), spacexai (SuperGrok or X Premium+, device code). The config then constructs the model with chatgpt(), copilot(), or grok() from e2e/oauth/<provider>.',
+      'Sign in once to a personal subscription and store the login for the e2e/oauth models: openai (ChatGPT Plus/Pro, the Codex sign-in), github-copilot (GitHub Copilot; reuses the GitHub CLI login or runs a device flow for your OAuth App), opencode-console (OpenCode Console, device code), spacexai (SuperGrok or X Premium+, device code). The config then constructs the model with chatgpt(), copilot(), opencodeConsole(), or grok() from e2e/oauth/<provider>.',
     )
-    .addArgument(new Argument('[provider]', 'openai, github-copilot, or spacexai; omitted, a picker').choices(PROVIDER_IDS))
+    .addArgument(new Argument('[provider]', 'openai, github-copilot, opencode-console, or spacexai; omitted, a picker').choices(PROVIDER_IDS))
     .option('--device', 'ChatGPT: show a code to enter on another device instead of opening a browser')
     .option('--client-id <id>', 'GitHub Copilot: the client id of your GitHub OAuth App with the device flow enabled')
     .option('--from-gh', 'GitHub Copilot: reuse the token of the signed-in GitHub CLI')
     .option('--enterprise-url <host>', 'GitHub Copilot: the GitHub Enterprise host')
     .addHelpText(
       'after',
-      ['', examples(['e2e login openai', 'e2e login github-copilot --from-gh', 'e2e login spacexai', 'e2e login']), '', docsLine('/subscriptions')].join('\n'),
+      ['', examples(['e2e login openai', 'e2e login github-copilot --from-gh', 'e2e login opencode-console', 'e2e login spacexai', 'e2e login']), '', docsLine('/subscriptions')].join('\n'),
     )
     .action(async (provider: string | undefined, options: LoginFlags) => {
       process.exitCode = await runLogin(provider, options);
@@ -457,8 +458,8 @@ function createProgram(version: string, telemetry: Telemetry): Command {
   program
     .command('logout')
     .summary('forget a stored subscription login')
-    .description('Remove the stored login of one provider (openai, github-copilot, spacexai). Without a provider, a picker over the stored logins.')
-    .addArgument(new Argument('[provider]', 'openai, github-copilot, or spacexai; omitted, a picker').choices(PROVIDER_IDS))
+    .description('Remove the stored login of one provider (openai, github-copilot, opencode-console, spacexai). Without a provider, a picker over the stored logins.')
+    .addArgument(new Argument('[provider]', 'openai, github-copilot, opencode-console, or spacexai; omitted, a picker').choices(PROVIDER_IDS))
     .addHelpText('after', ['', examples(['e2e logout', 'e2e logout openai']), '', docsLine('/subscriptions')].join('\n'))
     .action(async (provider: string | undefined) => {
       process.exitCode = await runLogout(provider);
@@ -468,9 +469,9 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .command('models')
     .summary('list the models a stored subscription login serves')
     .description(
-      'Ask the vendor which models the stored login serves and print their ids, the ones chatgpt(), copilot(), and grok() take. Without a provider, every stored login in turn.',
+      'Ask the vendor which models the stored login serves and print their ids, the ones chatgpt(), copilot(), opencodeConsole(), and grok() take. Without a provider, every stored login in turn.',
     )
-    .addArgument(new Argument('[provider]', 'openai, github-copilot, or spacexai; omitted, every stored login').choices(PROVIDER_IDS))
+    .addArgument(new Argument('[provider]', 'openai, github-copilot, opencode-console, or spacexai; omitted, every stored login').choices(PROVIDER_IDS))
     .addHelpText('after', ['', examples(['e2e models', 'e2e models openai']), '', docsLine('/subscriptions#pick-a-model')].join('\n'))
     .action(async (provider: string | undefined) => {
       process.exitCode = await runModels(provider);
@@ -496,7 +497,10 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     )
     .option('--config <path>', 'config file (default: the nearest e2e.config.ts)')
     .option('--target <name>', 'target every session opens on (default: the only target, or the one open_session names)')
-    .option('--headless', 'hide the UI during live sessions (default: headed outside CI)')
+    .option('--headed', 'show the UI in sessions whose open_session does not set headed, when the engine supports it')
+    // Sessions were headed by default before 0.18 and took --headless; a client config that still passes it
+    // asks for the default now, and a refused flag would surface as nothing but a failed connection.
+    .addOption(new Option('--headless').hideHelp())
     .option(
       '--max-sessions <n>',
       `sessions open at once, each with its own browser or device, ${SESSION_BOUNDS.min} through ${SESSION_BOUNDS.max} (default: ${SESSION_BOUNDS.default})`,
@@ -506,12 +510,12 @@ function createProgram(version: string, telemetry: Telemetry): Command {
       'after',
       [
         '',
-        examples(['e2e mcp', 'e2e mcp --target web --headless', 'e2e mcp --max-sessions 8', 'claude mcp add e2e -- npx e2e mcp']),
+        examples(['e2e mcp', 'e2e mcp --target web --headed', 'e2e mcp --max-sessions 8', 'claude mcp add e2e -- npx e2e mcp']),
         '',
         docsLine('/reference/mcp'),
       ].join('\n'),
     )
-    .action(async (options: { config?: string; target?: string; headless?: boolean; maxSessions?: number }) => {
+    .action(async (options: { config?: string; target?: string; headed?: boolean; maxSessions?: number }) => {
       process.exitCode = await mcp(version, options, telemetry);
     });
 
@@ -600,30 +604,36 @@ function createProgram(version: string, telemetry: Telemetry): Command {
         command: Command,
       ) => {
         rejectForwardedFlags(command, files);
-        return runToOutcome(telemetry, command, (signals) =>
-          run({
-            files,
-            configPath: options.config,
-            targetIds: options.target,
-            ...selectionRunOptions(options),
-            headed: options.headed,
-            agent: options.agent,
-            retries: options.retries,
-            workers: options.workers,
-            maxFailures: options.maxFailures,
-            repeatEach: options.repeatEach,
-            reporters: options.reporter,
-            output: options.output,
-            noCache: options.cache === false,
-            strictCache: options.strictCache,
-            debug: options.debug,
-            aiTrace: options.aiTrace,
-            trace: recordingOption(options.trace),
-            video: recordingOption(options.video),
-            interruptSignal: signals.interruptSignal,
-            forceSignal: signals.forceSignal,
-          }),
-        );
+        const output = claimRunnerOutput();
+        try {
+          await runToOutcome(telemetry, command, (signals) =>
+            run({
+              files,
+              configPath: options.config,
+              targetIds: options.target,
+              ...selectionRunOptions(options),
+              headed: options.headed,
+              agent: options.agent,
+              retries: options.retries,
+              workers: options.workers,
+              maxFailures: options.maxFailures,
+              repeatEach: options.repeatEach,
+              reporters: options.reporter,
+              output: options.output,
+              noCache: options.cache === false,
+              strictCache: options.strictCache,
+              debug: options.debug,
+              aiTrace: options.aiTrace,
+              trace: recordingOption(options.trace),
+              video: recordingOption(options.video),
+              interruptSignal: signals.interruptSignal,
+              forceSignal: signals.forceSignal,
+              processOutput: output,
+            }),
+          );
+        } finally {
+          output.end();
+        }
       },
     );
 

@@ -1,6 +1,7 @@
 ---
 title: Custom executors
 description: Customize the agent loop or implement your own step executor.
+icon: "microchip"
 ---
 
 Use a custom executor when a `system` prompt and [project tools](/tools) are
@@ -14,6 +15,8 @@ not enough. There are two options:
    `ai` package installed.
 
 Both receive a deadline, redacted observations, and checked action methods.
+For a provider that returns bounded choices instead of generated text, see
+the [Clef and Jev decision executor](/decision-models).
 The runner records their verdicts. Either goes under `executor` in an agents
 entry, beside the options that still apply: `model`, `judge`, `context`, and
 the budgets. An entry with `executor` rejects `system` and `tools`; pass
@@ -215,8 +218,10 @@ default, follows the configured cache mode. A recorded step replays without
 calling `runStep`. A replay that stops partway calls `runStep` with
 `ctx.replayedPrefix`: continue from the current screen and do not redo the
 replayed actions. What a step does through `ctx.actions` is recorded; a
-mutating tool call leaves a gap the executor fills on replay. Entries are not
-keyed by executor, so an entry one agent recorded replays for another.
+mutating tool call leaves a gap the executor fills on replay. Entries are
+keyed by the configured agent and its context, so an entry one agent
+recorded never replays for another; the executor itself is not part of the
+key, so changing an agent's executor keeps its entries.
 
 `'off'` never replays or records the executor's steps, so every step reaches
 `runStep`. Use it for a brain whose own history or memory is the source of

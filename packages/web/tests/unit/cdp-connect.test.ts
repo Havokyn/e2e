@@ -4,7 +4,7 @@
  * The end-to-end attach against a live Chrome is in tests/integration.
  */
 
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 import type { EngineInitInfo } from 'e2e/engine';
 import { web } from '../../src/index.ts';
 import { PlaywrightSurface } from '../../src/surface.ts';
@@ -34,18 +34,13 @@ describe('web({ connect })', () => {
     expect(engine.session?.restart).toBeTypeOf('function');
   });
 
-  it('rejects creation-time credentials, headers, and user agent with persistent recovery', () => {
+  it('rejects creation-time credentials, headers, user agent, locale, and time zone with persistent recovery', () => {
     const connect = { cdpEndpoint: () => 'ws://localhost:0', reconnectEndpoint: () => 'ws://localhost:0' };
     expect(() => web({ connect, headers: { 'x-preview': 'synthetic' } })).toThrow(/persistent context/);
     expect(() => web({ connect, basicAuth: { username: 'user', password: 'synthetic' } })).toThrow(/persistent context/);
     expect(() => web({ connect, userAgent: 'synthetic playwright' })).toThrow(/persistent context/);
-  });
-
-  it('accepts a connect option with the default chromium browser', () => {
-    expect(() => web({ connect: { cdpEndpoint: () => 'ws://localhost:0' } })).not.toThrow();
-    expect(() =>
-      web({ browser: 'chromium', connect: { cdpEndpoint: () => 'ws://localhost:0' } }),
-    ).not.toThrow();
+    expect(() => web({ connect, locale: 'de-DE' })).toThrow(/persistent context; locale requires/);
+    expect(() => web({ connect, timezoneId: 'Europe/Berlin' })).toThrow(/persistent context; timezoneId requires/);
   });
 
   it('rejects connect with a non-chromium browser as INVALID_CONFIG', () => {
@@ -58,56 +53,43 @@ describe('web({ connect })', () => {
 });
 
 describe('PlaywrightSurface CDP attach', () => {
-  it('fails init with ENGINE_FAILURE when the endpoint resolves empty, without touching a browser', async () => {
-    const surface = new PlaywrightSurface({ connect: { cdpEndpoint: () => '   ' } });
-    await expect(surface.init(initInfo())).rejects.toMatchObject({
+  it('fails init with ENGINE_FAILURE when the endpoint resolves empty or the resolver throws, without touching a browser', async () => {
+    const empty = new PlaywrightSurface({ connect: { cdpEndpoint: () => '   ' } });
+    await expect(empty.init(initInfo())).rejects.toMatchObject({
       code: 'ENGINE_FAILURE',
       retryable: false,
+      message: expect.stringContaining('connect.cdpEndpoint resolved to an empty CDP endpoint'),
     });
-  });
-
-  it('propagates the resolver error as an init failure', async () => {
-    const surface = new PlaywrightSurface({
+    const throwing = new PlaywrightSurface({
       connect: {
         cdpEndpoint: () => {
           throw new Error('vault down');
         },
       },
     });
-    await expect(surface.init(initInfo())).rejects.toMatchObject({ code: 'ENGINE_FAILURE' });
+    await expect(throwing.init(initInfo())).rejects.toMatchObject({
+      code: 'ENGINE_FAILURE',
+      message: expect.stringContaining('vault down'),
+    });
   });
 
-  it('hands the init signal to the resolver', async () => {
+  it('hands the init signal to the resolver and cancels promptly while it is still pending', async () => {
+    const controller = new AbortController();
     let seen: AbortSignal | undefined;
     const surface = new PlaywrightSurface({
       connect: {
         cdpEndpoint: (signal) => {
           seen = signal;
-          return '   ';
+          return new Promise<string>(() => undefined);
         },
       },
     });
-    await surface.init(initInfo()).catch(() => undefined);
-    expect(seen).toBeInstanceOf(AbortSignal);
-  });
-
-  it('cancels promptly while the resolver is still pending, without using its result', async () => {
-    const controller = new AbortController();
-    let settle: ((value: string) => void) | undefined;
-    const surface = new PlaywrightSurface({
-      connect: {
-        cdpEndpoint: (signal) =>
-          new Promise<string>((resolve) => {
-            settle = resolve;
-            signal.addEventListener('abort', () => resolve('ws://never-used'), { once: true });
-          }),
-      },
-    });
     const pending = surface.init(initInfo(controller.signal));
+    await vi.waitFor(() => expect(seen).toBeDefined());
+    expect(seen!.aborted).toBe(false);
     controller.abort();
     await expect(pending).rejects.toMatchObject({ code: 'CANCELLED' });
-    // The resolver was handed the same signal and saw the abort.
-    expect(settle).toBeDefined();
+    expect(seen!.aborted).toBe(true);
   });
 
   it('honours an already-aborted signal before resolving the endpoint', async () => {

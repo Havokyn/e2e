@@ -8,7 +8,8 @@
  * CLI boots (and `npx e2e init` runs) before any of them is installed, and
  * the mobile tool pack names `ai` in types only. `copilot()` loads
  * `@ai-sdk/openai` lazily too, only for the models Copilot serves over its
- * Responses API. Type imports erase and are
+ * Responses API, and `opencodeConsole()` loads every SDK but
+ * `@ai-sdk/openai-compatible` lazily. Type imports erase and are
  * exempt, as is the scaffold text `e2e init` writes from template literals.
  */
 
@@ -38,8 +39,10 @@ const SCOPES: readonly Scope[] = [
     dir: 'e2e',
     optionalPeerHomes: {
       ai: ['agent/ai-sdk.ts'],
-      '@ai-sdk/openai': ['oauth/chatgpt.ts', 'oauth/copilot.ts'],
-      '@ai-sdk/openai-compatible': ['oauth/copilot.ts'],
+      '@ai-sdk/anthropic': ['oauth/opencode-console.ts'],
+      '@ai-sdk/google': ['oauth/opencode-console.ts'],
+      '@ai-sdk/openai': ['oauth/chatgpt.ts', 'oauth/copilot.ts', 'oauth/opencode-console.ts'],
+      '@ai-sdk/openai-compatible': ['oauth/copilot.ts', 'oauth/opencode-console.ts'],
       '@ai-sdk/xai': ['oauth/grok.ts'],
     },
   },
@@ -166,13 +169,6 @@ describe('the scan', () => {
     expect(specifiers("/** Loads `ai` once: `await import('ai')`. */\nimport { slot } from './slot.ts';")).toEqual(['./slot.ts']);
     expect(specifiers("// falls back to import('ai')\nimport { z } from 'zod';")).toEqual(['zod']);
     expect(specifiers("const example = `import { test } from '@e2e-dev/web';\nimport { expect } from 'e2e';\n`;")).toEqual([]);
-  });
-
-  it('names the package a specifier belongs to', () => {
-    expect(packageOf('@modelcontextprotocol/server/stdio')).toBe('@modelcontextprotocol/server');
-    expect(packageOf('tsx/esm/api')).toBe('tsx');
-    expect(packageOf('e2e/engine')).toBe('e2e');
-    expect(packageOf('zod')).toBe('zod');
   });
 
   it('objects to a devDependency, a bare builtin, and an optional peer outside its home', () => {

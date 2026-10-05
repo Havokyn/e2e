@@ -1,4 +1,4 @@
-import type { BrowserContext, Frame, Request, Route } from 'playwright';
+import type { BrowserContext, Frame, Request, Route } from 'playwright-core';
 import { describe, expect, it, vi } from 'vitest';
 import { installNavigationPolicy } from '../../src/protected-app.ts';
 

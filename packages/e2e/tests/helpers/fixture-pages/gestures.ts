@@ -5,7 +5,8 @@ import { constant, type PageRenderer } from './page.ts';
 export const GESTURE_PAGES: Record<string, PageRenderer> = {
   // A hover-revealed control, a right-click menu, long-press and double-tap
   // detection, a drag target, a checkbox, a file input, a memo field whose
-  // selection the status echoes, and a footnote far below the fold. The hover trigger is pinned to a fixed box over nothing
+  // selection the status echoes, a radio the pick replaces with its summary,
+  // and a footnote far below the fold. The hover trigger is pinned to a fixed box over nothing
   // else, so a bare-point hover at a known coordinate reaches it alone. It
   // sits away from the viewport origin: headless Chromium on Linux starts
   // its pointer at (0, 0), and a move within the box it already occupies
@@ -38,8 +39,10 @@ export const GESTURE_PAGES: Record<string, PageRenderer> = {
   <label for="memo">Memo</label>
   <input id="memo" value="release approved" />
 
-  <p>Page the ledger down to Row 333 and stop there.</p>
-  <span>Jump to Row 333</span>
+  <fieldset id="delivery"><legend>Delivery</legend><label><input type="radio" name="delivery" value="Express" />Express</label></fieldset>
+
+  <p>Page the ledger down to Row 24 and stop there.</p>
+  <span>Jump to Row 24</span>
   <div id="ledger" role="list" aria-label="Ledger" style="position:relative;height:200px;overflow:auto;border:1px solid #000"><div id="ledger-spacer"></div></div>
   <output aria-label="Ledger state">golden out of view</output>
   <div style="height:3000px"></div>
@@ -66,13 +69,18 @@ export const GESTURE_PAGES: Record<string, PageRenderer> = {
     done.addEventListener('dragover', (event) => event.preventDefault());
     done.addEventListener('drop', (event) => { event.preventDefault(); state.textContent = 'Design review is done'; });
     document.getElementById('agree').addEventListener('change', (event) => { state.textContent = 'agreed: ' + event.target.checked; });
+    const delivery = document.getElementById('delivery');
+    delivery.addEventListener('change', (event) => {
+      delivery.innerHTML = '<p>' + event.target.value + ' delivery selected</p>';
+      state.textContent = 'delivery: ' + event.target.value;
+    });
     document.getElementById('attachment').addEventListener('change', (event) => {
       state.textContent = 'attached: ' + Array.from(event.target.files, (file) => file.name).join(', ');
     });
     // A windowed list: 400 rows of 40 px exist as data, and only the rows
     // inside the container's scrolled window are in the DOM, so the golden
     // row is nowhere in the tree until the list is paged down to it.
-    const ROWS = 400, ROW_PX = 40, GOLDEN = 333;
+    const ROWS = 400, ROW_PX = 40, GOLDEN = 24;
     const ledger = document.getElementById('ledger');
     document.getElementById('ledger-spacer').style.height = ROWS * ROW_PX + 'px';
     const ledgerState = document.querySelector('output[aria-label="Ledger state"]');

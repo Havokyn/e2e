@@ -1,6 +1,7 @@
 ---
 title: Models
 description: Configure a model with your own subscription, an API key, or a local server.
+icon: "brain"
 ---
 
 import { ModelProvider } from './snippets/model-provider.jsx';
@@ -12,8 +13,9 @@ e2e uses the [AI SDK](https://ai-sdk.dev/providers). You can use
 `e2e init` offers these choices and writes the config for you. For the first
 setup, follow the [quickstart](/quickstart#use-a-subscription-or-api-key).
 
-Tests without agent steps do not need a model. For the built-in agent,
-choose a model that supports tool calls and images. Agent steps need the `ai`
+Tests without agent steps do not need a model. [Decision models](/decision-models), hosted or locally
+hosted, such as Clef or Jev, can drive bounded actions and judge assertions through a custom executor. For the built-in agent,
+choose a model that supports tool calls and images. Steps using the built-in agent need the `ai`
 package installed, whichever provider you use:
 
 <CodeGroup>
@@ -232,6 +234,9 @@ Judgments use the current screen and the question, without the acting
 agent's transcript or summaries. Reports include the model used for each
 judgment. See [Custom executors](/executors) if you replace the built-in agent.
 
+`judge` takes an AI SDK language model. Clef and Jev use a different API;
+use the [decision executor](/decision-models) for `agent.act` and `agent.assert`.
+
 ## Data retention and compliance
 
 Model input is the redacted screen, the step instruction, and the
@@ -279,7 +284,7 @@ organizations with zero data retention.
 
 <CardGroup cols={2}>
   <Card title="Subscriptions" icon="key" href="/subscriptions">
-    Sign in with ChatGPT, Copilot, or SuperGrok.
+    Sign in with ChatGPT, Copilot, OpenCode Console, or SuperGrok.
   </Card>
   <Card title="Agents and personas" icon="users" href="/agents">
     Choose agents for tests and signed-in users.
