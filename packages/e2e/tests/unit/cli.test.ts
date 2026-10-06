@@ -594,6 +594,7 @@ describe('e2e feedback', () => {
     fetchMock = vi.fn().mockResolvedValue(new Response('{}', { status: 200 }));
     vi.stubGlobal('fetch', fetchMock);
     vi.stubEnv('E2E_TELEMETRY_DISABLED', undefined);
+    vi.stubEnv('E2E_TELEMETRY_ENABLED', '1');
     vi.stubEnv('DO_NOT_TRACK', undefined);
     vi.stubEnv('E2E_TELEMETRY_DEBUG', undefined);
     vi.stubEnv('CI', undefined);
@@ -626,13 +627,15 @@ describe('e2e feedback', () => {
     expect(written(stdoutSpy)).toBe(`Feedback sent to the e2e team, thank you. Reference: ${event?.uuid}\n`);
   });
 
-  it('still sends after e2e telemetry disable, under an id of its own', async () => {
+  it('sends nothing after e2e telemetry disable', async () => {
     await invoke('telemetry', 'disable');
     stdoutSpy.mockClear();
+    fetchMock.mockClear();
     await invoke('feedback', '-m', 'broken');
-    expect(process.exitCode).toBe(0);
-    const [event] = sentFeedback();
-    expect(event?.properties['distinct_id']).toBe(`feedback:${event?.uuid}`);
+    expect(process.exitCode).toBe(2);
+    expect(sentFeedback()).toEqual([]);
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(written(stderrSpy)).toContain('feedback not sent: telemetry is disabled (preference)');
   });
 
   it.each(['E2E_TELEMETRY_DISABLED', 'DO_NOT_TRACK'])('sends nothing and exits 2 when %s is set', async (variable) => {
@@ -706,6 +709,7 @@ describe('e2e telemetry', () => {
     configHome = mkdtempSync(path.join(os.tmpdir(), 'e2e-cli-telemetry-'));
     // The suite-wide opt-out is lifted; debug mode prints instead of sending.
     vi.stubEnv('E2E_TELEMETRY_DISABLED', undefined);
+    vi.stubEnv('E2E_TELEMETRY_ENABLED', '1');
     vi.stubEnv('DO_NOT_TRACK', undefined);
     vi.stubEnv('CI', undefined);
     vi.stubEnv('E2E_TELEMETRY_DEBUG', '1');
@@ -716,6 +720,24 @@ describe('e2e telemetry', () => {
   afterEach(() => {
     vi.unstubAllEnvs();
     rmSync(configHome, { recursive: true, force: true });
+  });
+
+  it('reports enabled after explicit opt-in and points at the docs', async () => {
+    await invoke('telemetry');
+    const out = written(stdoutSpy);
+    expect(out).toContain('Status: enabled\n');
+    expect(out).toContain('Details: https://e2e.tester.army/docs/telemetry\n');
+    expect(process.exitCode).toBe(0);
+  });
+
+  it('reports the privacy-first default when no opt-in exists', async () => {
+    vi.stubEnv('E2E_TELEMETRY_ENABLED', undefined);
+    await invoke('telemetry');
+    const out = written(stdoutSpy);
+    expect(out).toContain('Status: disabled (privacy-first default');
+    expect(out).toContain('No usage data is sent from this machine.\n');
+    expect(printedEvents()).toEqual([]);
+    expect(process.exitCode).toBe(0);
   });
 
   it('disable saves the choice, status names it, and enable restores it', async () => {
@@ -749,7 +771,7 @@ describe('e2e telemetry', () => {
   it('prints the notice once before the first command and a session event per command', async () => {
     await invoke('list');
     await invoke('list', '--tag', 'smoke');
-    const notices = written(stderrSpy).split('e2e collects anonymous usage telemetry').length - 1;
+    const notices = written(stderrSpy).split('e2e anonymous usage telemetry is enabled').length - 1;
     expect(notices).toBe(1);
     expect(written(stderrSpy)).toContain('e2e telemetry disable');
     const events = printedEvents();
@@ -764,16 +786,16 @@ describe('e2e telemetry', () => {
 
   it('does not print the notice before e2e telemetry itself', async () => {
     await invoke('telemetry');
-    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
+    expect(written(stderrSpy)).not.toContain('e2e anonymous usage telemetry is enabled');
     expect(printedEvents().map((event) => event.properties['command'])).toEqual(['telemetry']);
   });
 
   it('does not print the notice before e2e init, and still prints it before the next command', async () => {
     await invoke('init', '--yes');
-    expect(written(stderrSpy)).not.toContain('e2e collects anonymous usage telemetry');
+    expect(written(stderrSpy)).not.toContain('e2e anonymous usage telemetry is enabled');
     expect(printedEvents().filter((event) => event.event === 'e2e_cli_session').map((event) => event.properties['command'])).toEqual(['init']);
     await invoke('list');
-    expect(written(stderrSpy)).toContain('e2e collects anonymous usage telemetry');
+    expect(written(stderrSpy)).toContain('e2e anonymous usage telemetry is enabled');
   });
 
   it('records the run event from the report the run returned, with the flag names only', async () => {
@@ -861,5 +883,21 @@ describe('e2e telemetry', () => {
     expect(events.map((event) => event.event)).toEqual(['e2e_cli_session', 'e2e_init_completed']);
     expect(events[1]!.properties).toMatchObject({ result: 'cancelled', engine: 'agent-device', gateway: null, skill: false });
     expect(JSON.stringify(events)).not.toContain('secret-app');
+  });
+
+  it('is listed in the help with its actions', async () => {
+    await invoke('--help');
+    expect(written(stdoutSpy)).toMatch(/^ {2}telemetry \[action\] {2,}show, enable, or disable anonymous usage telemetry$/mu);
+    expect(written(stdoutSpy)).toContain('  $ e2e telemetry disable\n');
+
+    process.exitCode = undefined;
+    stdoutSpy.mockClear();
+    await invoke('telemetry', '--help');
+    const help = written(stdoutSpy);
+    expect(help).toContain('Usage: e2e telemetry [options] [action]');
+    expect(help).toContain('E2E_TELEMETRY_ENABLED=1');
+    expect(help).toContain('  $ E2E_TELEMETRY_ENABLED=1 e2e run\n');
+    expect(help).toContain('Docs: https://e2e.tester.army/docs/telemetry\n');
+    expect(process.exitCode).toBe(0);
   });
 });

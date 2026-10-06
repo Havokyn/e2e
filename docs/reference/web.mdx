@@ -83,6 +83,18 @@ export interface WebOptions {
    */
   readonly connect?: WebConnectOptions;
   /**
+   * Top-level navigation policy. This privacy-first fork defaults to
+   * `same-site`: routed typed navigation, link clicks, and popup main
+   * frames may not leave the target app's registrable site. HTTP redirect
+   * destinations bypass routing and are not checked. Off-site
+   * subresources and child frames remain allowed. The same-site policy
+   * installs request routing, which disables the browser HTTP cache and
+   * blocks service workers so they cannot bypass the navigation guard.
+   * Set `any` only when a deliberate flow, such as third-party OAuth, must
+   * leave the site.
+   */
+  readonly navigationPolicy?: 'same-site' | 'any';
+  /**
    * Headers added to requests within the app's site, including subdomains.
    * Useful for preview-protection tokens. Other sites never receive them.
    * Names are case-insensitive and replace existing headers of the same name.
@@ -369,7 +381,14 @@ in a suite that also runs on other platforms.
 ### Navigation
 
 `goto` defaults `waitUntil` to `'load'` and throws `POLICY_DENIED` for a
-URL whose scheme is not `http:` or `https:` (`about:blank` is admitted). `waitForURL` polls every 100 ms; a
+URL whose scheme is not `http:` or `https:` (the exact `about:blank` is admitted).
+In this privacy-first fork, `web()` also defaults `navigationPolicy` to
+`'same-site'`: routed off-site main-frame document requests from `goto`,
+`app.open`, agent steps, clicks, and popups are blocked. Off-site navigations with
+no available frame are blocked too. HTTP redirect destinations bypass
+Playwright routing and are not checked, so a same-site URL can redirect
+the browser off-site. Set `web({ navigationPolicy: 'any' })` only for a flow that
+intentionally leaves the app's site. `waitForURL` polls every 100 ms; a
 relative string resolves against the base URL and matches exactly after
 normalization, a `RegExp` tests the full URL, anything else (a predicate
 function, say) is `INVALID_ARGUMENT`, and a timeout is `ASSERTION_FAILED`. It

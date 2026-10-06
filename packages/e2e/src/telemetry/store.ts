@@ -130,9 +130,14 @@ export class TelemetryStore {
     return store.write() ? store : undefined;
   }
 
-  /** The user's choice; unset means participating. */
+  /** The user's explicit choice. Undefined means no choice has been made. */
+  get choice(): boolean | undefined {
+    return this.preferences.enabled;
+  }
+
+  /** Privacy-first: telemetry is enabled only after an explicit opt-in. */
   get enabled(): boolean {
-    return this.preferences.enabled !== false;
+    return this.preferences.enabled === true;
   }
 
   /** The random per-machine id every event from this machine is attributed to. */

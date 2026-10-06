@@ -51,11 +51,12 @@ export function surfaceOf(engine: EngineHandle): PlaywrightLiveSurface | undefin
   return { page: () => surface.requirePage(), context: () => surface.requireContext() };
 }
 
+/** Validates browser options and creates a web engine handle backed by a Playwright surface. */
 export function web(options: WebOptions = {}): EngineHandle {
   if ('allowedOrigins' in options) {
     throw new ConfigurationError(
       'INVALID_CONFIG',
-      'web({ allowedOrigins }) is gone: navigation and secret fills are not gated by origin; remove the option',
+      'web({ allowedOrigins }) is gone: use navigationPolicy: "same-site" for top-level navigation; secret fills remain field-gated',
     );
   }
   if ('video' in options) {
@@ -78,6 +79,9 @@ export function web(options: WebOptions = {}): EngineHandle {
       'INVALID_CONFIG',
       `web({ connect }) requires the chromium browser; CDP attach is chromium-only, got "${options.browser}"`,
     );
+  }
+  if (options.navigationPolicy !== undefined && options.navigationPolicy !== 'same-site' && options.navigationPolicy !== 'any') {
+    throw new ConfigurationError('INVALID_CONFIG', 'web({ navigationPolicy }) must be "same-site" or "any"');
   }
   if (options.headers !== undefined) validateHeaders(options.headers);
   if (options.basicAuth !== undefined) validateBasicAuth(options.basicAuth);
@@ -165,6 +169,7 @@ const WEB_OPTION_KEYS: readonly string[] = Object.keys({
   viewport: true,
   screencast: true,
   connect: true,
+  navigationPolicy: true,
   headers: true,
   basicAuth: true,
   testIdAttribute: true,

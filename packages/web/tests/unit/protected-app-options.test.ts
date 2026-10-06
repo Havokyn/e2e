@@ -1,5 +1,5 @@
 /**
- * The `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, `locale`, `timezoneId`, `initScripts`, and `screencast` options are checked at
+ * The `navigationPolicy`, `headers`, `basicAuth`, `testIdAttribute`, `userAgent`, `locale`, `timezoneId`, `initScripts`, and `screencast` options are checked at
  * config load, so a header the browser could never send or an attribute no
  * element could carry fails the run before a browser launches. What the
  * browser does with valid ones is in tests/integration.
@@ -10,6 +10,18 @@ import { secrets } from 'e2e';
 import { web, type WebOptions } from '../../src/index.ts';
 import { httpCredentials } from '../../src/protected-app.ts';
 
+describe('web({ navigationPolicy })', () => {
+  it('accepts the privacy-first same-site policy and the explicit unrestricted policy', () => {
+    expect(() => web({ navigationPolicy: 'same-site' })).not.toThrow();
+    expect(() => web({ navigationPolicy: 'any' })).not.toThrow();
+  });
+
+  it('rejects an unknown policy', () => {
+    expect(() => web({ navigationPolicy: 'oauth-only' as unknown as 'same-site' })).toThrowError(
+      /navigationPolicy.*same-site.*any/,
+    );
+  });
+});
 describe('web({ headers })', () => {
   it('rejects a header name outside the token grammar as INVALID_CONFIG', () => {
     for (const name of ['x bypass', 'x:bypass', '', 'x\nbypass']) {
@@ -160,7 +172,7 @@ describe('web() option keys', () => {
       refused('web() has unknown key "viewprt"; did you mean "viewport"?'),
     );
     expect(() => web({ launchOptions: {} } as unknown as Parameters<typeof web>[0])).toThrow(
-      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, headers, basicAuth, testIdAttribute, userAgent, locale, timezoneId, initScripts'),
+      refused('web() has unknown key "launchOptions"; expected one of browser, viewport, screencast, connect, navigationPolicy, headers, basicAuth, testIdAttribute, userAgent, locale, timezoneId, initScripts'),
     );
   });
 

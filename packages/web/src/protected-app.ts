@@ -5,9 +5,9 @@
  * context it creates; nothing here holds state.
  */
 
-import type { BrowserContext } from 'playwright-core';
+import type { BrowserContext, Route } from 'playwright-core';
 import { sameSite, type ResolveSecretOptions, type Secret } from 'e2e/engine';
-import type { WebBasicAuth } from './surface.ts';
+import type { WebBasicAuth, WebNavigationPolicy } from './surface.ts';
 
 /** The credentials Playwright answers an HTTP authentication challenge with. */
 export interface PlaywrightHttpCredential {
@@ -77,6 +77,62 @@ export async function installSiteHeaders(
   );
 }
 
+interface InstalledNavigationPolicy {
+  readonly predicate: (url: URL) => boolean;
+  readonly handler: (route: Route) => Promise<void>;
+}
+
+/** The one security route installed on each live context, so it can be moved
+ * back to highest precedence after a test registers its own route. */
+const navigationPolicies = new WeakMap<BrowserContext, InstalledNavigationPolicy>();
+/**
+ * Enforces the fork's top-level navigation policy.
+ *
+ * `same-site` blocks routed off-site main-frame document requests from
+ * app.open/browser.goto, agent navigation, link clicks, and popups. HTTP
+ * redirect destinations bypass Playwright routing and are not checked.
+ * Subresources and child-frame navigations are allowed so CDNs, APIs,
+ * analytics, and embedded content do not break the app. `any` preserves
+ * upstream's unrestricted http(s) behavior.
+ */
+export async function installNavigationPolicy(
+  context: BrowserContext,
+  site: string | undefined,
+  policy: WebNavigationPolicy,
+): Promise<void> {
+  const previous = navigationPolicies.get(context);
+  if (policy === 'any' || site === undefined) {
+    if (previous !== undefined) {
+      await context.unroute(previous.predicate, previous.handler).catch(() => undefined);
+      navigationPolicies.delete(context);
+    }
+    return;
+  }
+
+  const predicate = (url: URL) => !sameSite(url, site);
+  const handler = async (route: Route): Promise<void> => {
+    const request = route.request();
+    let topLevelNavigation = request.isNavigationRequest();
+    if (topLevelNavigation) {
+      try {
+        topLevelNavigation = request.frame().parentFrame() === null;
+      } catch {
+        // A popup's first request can precede its frame. Keep the navigation
+        // blocked when we cannot establish that it belongs to a child frame.
+      }
+    }
+    if (topLevelNavigation) {
+      await route.abort('blockedbyclient').catch(() => undefined);
+      return;
+    }
+    await route.fallback().catch(() => undefined);
+  };
+  await context.route(predicate, handler);
+  navigationPolicies.set(context, { predicate, handler });
+  if (previous !== undefined) {
+    await context.unroute(previous.predicate, previous.handler).catch(() => undefined);
+  }
+}
 /**
  * The basic-auth credentials a context answers a challenge with, as
  * Playwright's own `httpCredentials` does: on a 401 from any origin. A site

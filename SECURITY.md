@@ -55,28 +55,35 @@ with a memory-only key, and deleted at cleanup.
 
 ## Navigation and origins
 
-On the web a test or the agent may open any http(s) URL, and `about:blank`;
-every other scheme (`file:`, `data:`, `javascript:`, `view-source:`, `blob:`)
-is denied. A device link may use an app's custom scheme, so
-`device.openLink` refuses a list instead: `file:`, `data:`, `javascript:`,
-`view-source:`, `blob:`, and `filesystem:`. There is no origin allowlist, on navigation or on
-secret fills. A click, a redirect, or a popup reaches another origin just as
-a typed URL would, so a gate on typed navigation guarded nothing; and a
-secret is only ever typed into a field the test itself handed to the step, a
-password only into a password field, so an origin gate on the fill guarded
-against a model mistake at the cost of configuring every sign-in flow that
-leaves the app's domain. Treat a target whose app can send the agent
-elsewhere as one the agent may follow there, with the secrets the step was
-given. If a threat model ever calls for an origin allowlist again, it comes
-back as an opt-in.
+On the web, explicit navigation still admits only `http:`, `https:`, and
+the exact `about:blank`; schemes such as `file:`, `data:`, `javascript:`,
+`view-source:`, and `blob:` remain denied. A device link may use an app's
+custom scheme, so `device.openLink` keeps the upstream denylist for
+`file:`, `data:`, `javascript:`, `view-source:`, `blob:`, and
+`filesystem:`.
 
-Two things still key on the site of the target's `url`, its registrable
-domain: the browser engine's `headers` reach the site and no other host, and
+This privacy-first fork additionally defaults the web engine to
+`web({ navigationPolicy: 'same-site' })`. Off-site top-level document
+navigation is blocked whether it comes from typed navigation, an agent step,
+a link click, or a popup. HTTP redirect destinations bypass Playwright
+routing and are not checked, so an allowed same-site URL can redirect the
+browser off-site. Off-site subresources and child-frame navigation remain
+allowed so normal CDNs and embedded content keep working.
+Set `web({ navigationPolicy: 'any' })` only for flows that deliberately leave
+the app's site, such as third-party OAuth.
+
+The policy is site-based rather than an exact-origin allowlist. It uses the
+same hostname/site approximation as the rest of e2e, so shared hosting
+domains can be broader than you may expect. Secret fills are still authorized
+by field/step rules rather than by origin; a password still requires a
+password field.
+
+Configured browser `headers` reach the target's site and no other site, and
 child frames off the site are dropped from observations.
 
 ## Telemetry and outbound traffic
 
-The CLI sends anonymous usage telemetry, on by default. One `e2e_cli_session`
+The CLI supports anonymous usage telemetry, but this privacy-first fork keeps it off by default until explicitly enabled. One `e2e_cli_session`
 event per command carries the command name, the names of the flags given, the
 exit code and the runner error code that ended the command, the e2e, Node, and
 OS versions, the CPU count and memory class, and whether the shell is a
@@ -111,18 +118,20 @@ and `E2E_TELEMETRY_DEBUG=1` prints each event instead of sending it. PostHog
 stores no request address and, because every event carries
 `$geoip_disable: true`, derives no location from it.
 
-Opt out with `e2e telemetry disable`, `E2E_TELEMETRY_DISABLED=1`, or
-`DO_NOT_TRACK=1`. Telemetry is a CLI concern; the runner itself sends nothing.
+Opt in locally with `e2e telemetry enable`, or for ephemeral CI/fleet runs with
+`E2E_TELEMETRY_ENABLED=1`. Turn it back off with `e2e telemetry disable`,
+`E2E_TELEMETRY_DISABLED=1`, or `DO_NOT_TRACK=1`. Telemetry is a CLI concern;
+the runner itself sends nothing.
 Telemetry falls under the disclosure policy above.
 
 There is no crash reporting and no update check. The complete list of
 outbound connections a run can make:
 
-- one telemetry request per CLI invocation to `eu.i.posthog.com`, plus at
-  most one per session that `e2e mcp` serves, unless opted out
-- one request to `eu.i.posthog.com` per `e2e feedback` someone runs, carrying
-  the report written into its flags; `E2E_TELEMETRY_DISABLED` and
-  `DO_NOT_TRACK` stop it
+- when telemetry is explicitly enabled, one telemetry request per CLI invocation
+  to `eu.i.posthog.com`, plus at most one per session that `e2e mcp` serves
+- when telemetry is explicitly enabled, one request to `eu.i.posthog.com` per
+  `e2e feedback` someone runs; otherwise feedback is refused (or can be printed
+  locally with `--dry-run`)
 - the model endpoint owned by the AI SDK instance in your config (agent steps
   only; deterministic suites make no model calls, and cached steps replay
   without one)

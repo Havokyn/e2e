@@ -63,28 +63,34 @@ A tool call that breaks a rule fails with `POLICY_DENIED`:
 
 ## Navigation and origins
 
-Navigation and secret fills have no origin allowlist. The agent can follow
-the app to other sites and use the secrets supplied to the current step
-there. Password fills still require a password field.
+The web engine in this privacy-first fork defaults to
+`navigationPolicy: 'same-site'`. It installs a browser-context route that
+blocks routed off-site main-frame document requests from `app.open`,
+`browser.goto`, agent steps, link clicks, and popups. An off-site navigation whose
+frame is not available yet is blocked too. HTTP redirect destinations
+bypass Playwright routing and are not checked: an allowed same-site URL
+can redirect the browser off-site. This policy is not a network isolation
+boundary. Set
+`web({ navigationPolicy: 'any' })` only when a deliberate flow such as
+third-party OAuth must leave the target site.
 
-The browser engine uses a hostname-based site check for two purposes:
-
-- Configured `headers` are added to requests on the target's site.
-- Child frames outside that site, and `data:` frames, are omitted from
-  observations.
+Off-site subresources and child-frame navigations are not blocked. The
+browser engine also uses the site check to keep configured `headers` on the
+target's site and to omit off-site child frames (and `data:` frames) from
+observations.
 
 The site check approximates the registrable domain without a public suffix
-list. Shared hosting domains such as `vercel.app` count as one site, so
-headers can reach other hosts under that domain. `basicAuth` is broader:
-it answers a `401` challenge from any origin.
+list. Shared hosting domains such as `vercel.app` can therefore be broader
+than an exact-origin allowlist. `basicAuth` is broader too: it answers a
+`401` challenge from any origin.
 
-The runner checks the scheme on explicit navigation. `app.open`,
-`browser.goto`, and the agent's `navigate` verb admit `http:`, `https:`,
-and the exact `about:blank`. A device link may use an app's custom scheme, so `device.openLink`
-refuses a list instead: `file:`, `data:`, `javascript:`, `view-source:`,
-`blob:`, and `filesystem:`. `device.openApp` and the `open_app` tool take an
-app id and refuse a link, since the device would open one as a URL. The runner does not re-check redirects or attach to popup
-pages. Register `browser.onDialog` to handle browser dialogs.
+Secret fills are not origin-gated. They remain protected by the step/field
+authorization rules below, and password fills still require a password
+field. Explicit web navigation continues to admit only `http:`, `https:`,
+and exact `about:blank`; every other scheme is denied. Device links retain
+the upstream denylist for `file:`, `data:`, `javascript:`,
+`view-source:`, `blob:`, and `filesystem:`. Device navigation is not
+covered by the browser-only `navigationPolicy`.
 
 ## Secrets
 
@@ -284,10 +290,11 @@ what comes back is validated again before use.
 
 Built-in features may connect to:
 
-- one telemetry request per CLI invocation to `eu.i.posthog.com`, plus at
-  most one per session that `e2e mcp` serves, unless opted out; see [Telemetry](/telemetry)
-- one request to `eu.i.posthog.com` per `e2e feedback` you run; see
-  [Feedback](/telemetry#feedback)
+- when telemetry is explicitly enabled, one telemetry request per CLI invocation
+  to `eu.i.posthog.com`, plus at most one per session that `e2e mcp` serves; see [Telemetry](/telemetry)
+- when telemetry is explicitly enabled, one request to `eu.i.posthog.com` per
+  `e2e feedback` you run; with telemetry disabled the command refuses to send;
+  see [Feedback](/telemetry#feedback)
 - the provider endpoint used by your configured model. Deterministic tests
   and fully replayed action steps make no model call.
 - readiness probes against the `readyUrl` of the app the runner starts
