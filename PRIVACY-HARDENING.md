@@ -35,7 +35,7 @@ The web engine defaults to:
 web({ navigationPolicy: 'same-site' })
 ```
 
-This blocks off-site **top-level document navigation** regardless of whether it comes from a typed URL, agent navigation, a click, a redirect, or a popup. Off-site subresources and child frames remain allowed.
+This blocks off-site **top-level document navigation** whether it comes from a typed URL, agent navigation, a click, or a popup. HTTP redirect destinations bypass Playwright routing and are not checked, so an allowed same-site URL can redirect the browser off-site. Off-site subresources and child frames remain allowed.
 
 For a deliberate cross-site flow such as third-party OAuth:
 

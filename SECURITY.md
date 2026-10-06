@@ -65,8 +65,10 @@ custom scheme, so `device.openLink` keeps the upstream denylist for
 This privacy-first fork additionally defaults the web engine to
 `web({ navigationPolicy: 'same-site' })`. Off-site top-level document
 navigation is blocked whether it comes from typed navigation, an agent step,
-a link click, a redirect, or a popup. Off-site subresources and child-frame
-navigation remain allowed so normal CDNs and embedded content keep working.
+a link click, or a popup. HTTP redirect destinations bypass Playwright
+routing and are not checked, so an allowed same-site URL can redirect the
+browser off-site. Off-site subresources and child-frame navigation remain
+allowed so normal CDNs and embedded content keep working.
 Set `web({ navigationPolicy: 'any' })` only for flows that deliberately leave
 the app's site, such as third-party OAuth.
 
